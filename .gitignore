@@ -1,0 +1,9 @@
+build/
+runs/
+
+*.o
+*.a
+*.so
+
+projects/*/data/*
+!projects/*/data/README.md
