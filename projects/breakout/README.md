@@ -38,6 +38,7 @@ Config-selected token stacks:
 ```text
 projects/breakout/pufferlib_token_mlp.ini
 projects/breakout/pufferlib_token_linear.ini
+projects/breakout/pufferlib_token_ngram.ini
 ```
 
 Headless PufferLib benchmark:

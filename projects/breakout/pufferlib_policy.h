@@ -16,17 +16,29 @@
 #define BREAKOUT_PUFFERLIB_TOKEN_HISTORY 8u
 #define BREAKOUT_PUFFERLIB_TOKEN_FEATURES 65536u
 #define BREAKOUT_PUFFERLIB_TOKEN_DEFAULT_MLP_HIDDEN 64u
+#define BREAKOUT_PUFFERLIB_TOKEN_NGRAM_ENTRIES 4096u
+#define BREAKOUT_PUFFERLIB_TOKEN_NGRAM_OBS_CANDIDATES 4u
 
 typedef enum {
     BREAKOUT_PUFFERLIB_TOKEN_MODEL_UNSPECIFIED = 0,
     BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW = 1,
-    BREAKOUT_PUFFERLIB_TOKEN_MODEL_LINEAR_POLICY = 2
+    BREAKOUT_PUFFERLIB_TOKEN_MODEL_LINEAR_POLICY = 2,
+    BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM = 3
 } BreakoutPufferlibTokenModelKind;
 
 typedef enum {
     BREAKOUT_PUFFERLIB_TOKEN_HEAD_UNSPECIFIED = 0,
-    BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL = 1
+    BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL = 1,
+    BREAKOUT_PUFFERLIB_TOKEN_HEAD_TYPED_NEXT_TOKEN = 2
 } BreakoutPufferlibTokenHeadKind;
+
+typedef struct {
+    uint32_t key;
+    uint16_t obs_tokens[BREAKOUT_PUFFERLIB_TOKEN_NGRAM_OBS_CANDIDATES];
+    uint16_t obs_counts[BREAKOUT_PUFFERLIB_TOKEN_NGRAM_OBS_CANDIDATES];
+    uint16_t action_counts[TKM_PUFFERLIB_BREAKOUT_ACTION_COUNT];
+    uint8_t used;
+} BreakoutPufferlibTokenNgramEntry;
 
 typedef struct {
     uint32_t hidden_dim;
@@ -96,6 +108,8 @@ typedef struct {
     float heldout_accuracy;
     uint32_t bin_count;
     uint32_t selected_dim_count;
+    float obs_token_accuracy;
+    float action_token_accuracy;
     char sequence_layout_name[BREAKOUT_PUFFERLIB_LAYER_NAME_MAX];
     char observation_tokenizer_name[BREAKOUT_PUFFERLIB_LAYER_NAME_MAX];
     char sequence_model_name[BREAKOUT_PUFFERLIB_LAYER_NAME_MAX];
@@ -116,6 +130,10 @@ typedef struct {
     float obs_min[TKM_PUFFERLIB_BREAKOUT_OBS_DIM];
     float obs_max[TKM_PUFFERLIB_BREAKOUT_OBS_DIM];
     float weights[BREAKOUT_PUFFERLIB_TOKEN_FEATURES * TKM_PUFFERLIB_BREAKOUT_ACTION_COUNT];
+    BreakoutPufferlibTokenNgramEntry ngram_entries[BREAKOUT_PUFFERLIB_TOKEN_NGRAM_ENTRIES];
+    uint32_t ngram_action_prior[TKM_PUFFERLIB_BREAKOUT_ACTION_COUNT];
+    uint32_t stream_context[BREAKOUT_PUFFERLIB_TOKEN_HISTORY];
+    uint32_t stream_context_count;
     TkmMlpWindow mlp;
     uint8_t prev_actions[BREAKOUT_PUFFERLIB_TOKEN_HISTORY];
     uint32_t prev_action_count;

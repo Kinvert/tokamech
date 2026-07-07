@@ -250,9 +250,11 @@ int main(void) {
                 token_report.observation_tokenizer_name,
                 token_report.sequence_model_name,
                 token_report.action_head_name);
-            printf("pufferlib breakout token_train rows=%u heldout_accuracy=%.3f bins=%u dims=%u history=%u epochs=%u learning_rate=%.5f input_dim=%u hidden=%u\n",
+            printf("pufferlib breakout token_train rows=%u heldout_accuracy=%.3f obs_token_accuracy=%.3f action_token_accuracy=%.3f bins=%u dims=%u history=%u epochs=%u learning_rate=%.5f input_dim=%u hidden=%u\n",
                 token_report.source_rows,
                 token_report.heldout_accuracy,
+                token_report.obs_token_accuracy,
+                token_report.action_token_accuracy,
                 token_report.bin_count,
                 token_report.selected_dim_count,
                 token_policy.history,
@@ -406,8 +408,12 @@ have_action:
         if (use_mlp) {
             mode_name = "mlp";
         } else if (use_token) {
-            mode_name = strcmp(token_report.sequence_model_name, "linear_policy") == 0 ?
-                "token_linear_policy" : "token_mlp";
+            if (strcmp(token_report.sequence_model_name, "token_ngram") == 0) {
+                mode_name = "token_ngram";
+            } else {
+                mode_name = strcmp(token_report.sequence_model_name, "linear_policy") == 0 ?
+                    "token_linear_policy" : "token_mlp";
+            }
         } else if (use_sequence) {
             mode_name = "sequence_cursor";
         } else if (use_nearest) {

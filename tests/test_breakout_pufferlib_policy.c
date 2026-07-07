@@ -475,6 +475,77 @@ static void make_token_relation_dataset(TkmFloatTransitionDataset* dataset) {
     }
 }
 
+static const char* token_autoregressive_ini_text(void) {
+    return
+        "[sequence_layout]\n"
+        "kind = autoregressive_obs_action\n"
+        "history = 8\n"
+        "predict = next_token\n"
+        "\n"
+        "[tokenizer.observation]\n"
+        "kind = selected_quantized\n"
+        "dims = 4\n"
+        "selection = action_separation\n"
+        "bins = 4\n"
+        "\n"
+        "[tokenizer.action]\n"
+        "kind = categorical\n"
+        "actions = 3\n"
+        "\n"
+        "[sequence_model]\n"
+        "kind = token_ngram\n"
+        "epochs = 4\n"
+        "learning_rate = 0.10\n"
+        "\n"
+        "[action_head]\n"
+        "kind = typed_next_token\n"
+        "actions = 3\n";
+}
+
+static void set_autoregressive_pattern_obs(float* obs, uint32_t phase) {
+    static const float values[4] = {0.05f, 0.35f, 0.65f, 0.95f};
+
+    memset(obs, 0, sizeof(float) * TKM_PUFFERLIB_BREAKOUT_OBS_DIM);
+    obs[0] = values[phase % 4u];
+    obs[1] = values[(phase + 1u) % 4u];
+    obs[2] = values[(phase + 2u) % 4u];
+    obs[3] = values[(phase + 3u) % 4u];
+}
+
+static uint8_t autoregressive_pattern_action(uint32_t phase) {
+    if ((phase % 4u) == 0u) {
+        return 0u;
+    }
+    if ((phase % 4u) == 1u || (phase % 4u) == 3u) {
+        return 1u;
+    }
+    return 2u;
+}
+
+static void make_autoregressive_pattern_dataset(TkmFloatTransitionDataset* dataset) {
+    tkm_float_transition_dataset_init(dataset);
+    for (int32_t episode = 0; episode < 24; episode++) {
+        for (int32_t t = 0; t < 8; t++) {
+            uint32_t phase = (uint32_t)((episode + t) % 4);
+            TkmFloatTransition* row;
+
+            CHECK(dataset->row_count < TKM_FLOAT_TRANSITION_MAX_ROWS);
+            row = &dataset->rows[dataset->row_count++];
+            memset(row, 0, sizeof(*row));
+            row->version = 1;
+            strcpy(row->env, "pufferlib_breakout");
+            strcpy(row->source, "test");
+            row->env_index = 0;
+            row->episode = episode;
+            row->t = t;
+            row->obs_dim = TKM_PUFFERLIB_BREAKOUT_OBS_DIM;
+            set_autoregressive_pattern_obs(row->obs, phase);
+            row->action = autoregressive_pattern_action(phase);
+            row->terminal = t == 7 ? 1u : 0u;
+        }
+    }
+}
+
 static void test_breakout_token_config_parses_layered_ini_and_trains_mlp_backend(void) {
     static TkmFloatTransitionDataset dataset;
     TkmIni ini;
@@ -540,6 +611,38 @@ static void test_breakout_token_config_selects_linear_backend_without_changing_l
     CHECK(report.heldout_accuracy >= 0.75f);
 }
 
+static void test_breakout_token_config_selects_autoregressive_next_token_backend(void) {
+    static TkmFloatTransitionDataset dataset;
+    TkmIni ini;
+    BreakoutPufferlibTokenPolicy policy;
+    BreakoutPufferlibTokenConfig config;
+    BreakoutPufferlibTokenReport report;
+    float obs[TKM_PUFFERLIB_BREAKOUT_OBS_DIM] = {0.0f};
+    uint8_t action = 99u;
+
+    CHECK(tkm_ini_parse(&ini, token_autoregressive_ini_text()) == TKM_OK);
+    CHECK(breakout_pufferlib_token_config_from_ini(&ini, &config) == TKM_OK);
+    CHECK(config.model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM);
+    CHECK(config.head_kind == BREAKOUT_PUFFERLIB_TOKEN_HEAD_TYPED_NEXT_TOKEN);
+    CHECK(config.selected_dim_count == 4u);
+    CHECK(config.bin_count == 4u);
+
+    make_autoregressive_pattern_dataset(&dataset);
+    CHECK(breakout_pufferlib_token_policy_train(&policy, &dataset, &config, &report) == TKM_OK);
+    CHECK(strcmp(report.sequence_layout_name, "autoregressive_obs_action") == 0);
+    CHECK(strcmp(report.observation_tokenizer_name, "selected_quantized") == 0);
+    CHECK(strcmp(report.sequence_model_name, "token_ngram") == 0);
+    CHECK(strcmp(report.action_head_name, "typed_next_token") == 0);
+    CHECK(policy.model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM);
+    CHECK(report.obs_token_accuracy >= 0.70f);
+    CHECK(report.action_token_accuracy >= 0.70f);
+
+    set_autoregressive_pattern_obs(obs, 2u);
+    CHECK(breakout_pufferlib_token_policy_reset(&policy) == TKM_OK);
+    CHECK(breakout_pufferlib_token_policy_predict(&policy, obs, &action) == TKM_OK);
+    CHECK(action == autoregressive_pattern_action(2u));
+}
+
 int main(void) {
     test_breakout_policy_trains_action_classifier_and_reports_accuracy();
     test_breakout_policy_reports_filter_metadata();
@@ -553,6 +656,7 @@ int main(void) {
     test_breakout_token_policy_trains_next_action_from_quantized_tokens();
     test_breakout_token_config_parses_layered_ini_and_trains_mlp_backend();
     test_breakout_token_config_selects_linear_backend_without_changing_loader_contract();
+    test_breakout_token_config_selects_autoregressive_next_token_backend();
     puts("breakout pufferlib policy tests passed");
     return 0;
 }

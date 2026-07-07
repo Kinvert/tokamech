@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "core/sequence/layout.h"
+
 static int breakout_policy_ready(const BreakoutPufferlibPolicy* policy) {
     return policy &&
         policy->obs_dim == TKM_PUFFERLIB_BREAKOUT_OBS_DIM &&
@@ -51,6 +53,9 @@ static int breakout_copy_name(char* dst, uint32_t dst_count, const char* src) {
 }
 
 static const char* breakout_token_model_name(BreakoutPufferlibTokenModelKind kind) {
+    if (kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM) {
+        return "token_ngram";
+    }
     if (kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_LINEAR_POLICY) {
         return "linear_policy";
     }
@@ -58,8 +63,24 @@ static const char* breakout_token_model_name(BreakoutPufferlibTokenModelKind kin
 }
 
 static const char* breakout_token_head_name(BreakoutPufferlibTokenHeadKind kind) {
-    (void)kind;
+    if (kind == BREAKOUT_PUFFERLIB_TOKEN_HEAD_TYPED_NEXT_TOKEN) {
+        return "typed_next_token";
+    }
     return "categorical";
+}
+
+static const char* breakout_token_layout_name(BreakoutPufferlibTokenModelKind kind) {
+    if (kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM) {
+        return "autoregressive_obs_action";
+    }
+    return "obs_action_interleaved";
+}
+
+static const char* breakout_token_observation_tokenizer_name(BreakoutPufferlibTokenModelKind kind) {
+    if (kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM) {
+        return "selected_quantized";
+    }
+    return "selected_continuous";
 }
 
 static int breakout_token_model_kind_from_string(
@@ -77,6 +98,10 @@ static int breakout_token_model_kind_from_string(
         *out = BREAKOUT_PUFFERLIB_TOKEN_MODEL_LINEAR_POLICY;
         return TKM_OK;
     }
+    if (strcmp(text, "token_ngram") == 0) {
+        *out = BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM;
+        return TKM_OK;
+    }
     return TKM_ERR;
 }
 
@@ -89,6 +114,10 @@ static int breakout_token_head_kind_from_string(
     }
     if (strcmp(text, "categorical") == 0) {
         *out = BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL;
+        return TKM_OK;
+    }
+    if (strcmp(text, "typed_next_token") == 0) {
+        *out = BREAKOUT_PUFFERLIB_TOKEN_HEAD_TYPED_NEXT_TOKEN;
         return TKM_OK;
     }
     return TKM_ERR;
@@ -1127,6 +1156,325 @@ static int breakout_token_build_features(
     return TKM_OK;
 }
 
+static uint32_t breakout_token_stream_code(uint8_t type, uint16_t token) {
+    return ((uint32_t)type << 16u) | (uint32_t)token;
+}
+
+static void breakout_token_stream_context_reset(uint32_t* context, uint32_t* context_count) {
+    if (!context || !context_count) {
+        return;
+    }
+    for (uint32_t i = 0u; i < BREAKOUT_PUFFERLIB_TOKEN_HISTORY; i++) {
+        context[i] = 0u;
+    }
+    *context_count = 0u;
+}
+
+static void breakout_token_stream_context_push(
+    uint32_t* context,
+    uint32_t* context_count,
+    uint32_t history,
+    uint32_t code
+) {
+    uint32_t count;
+
+    if (!context || !context_count || history == 0u) {
+        return;
+    }
+    if (history > BREAKOUT_PUFFERLIB_TOKEN_HISTORY) {
+        history = BREAKOUT_PUFFERLIB_TOKEN_HISTORY;
+    }
+    count = *context_count;
+    if (count < history) {
+        context[count] = code;
+        *context_count = count + 1u;
+        return;
+    }
+    for (uint32_t i = 1u; i < history; i++) {
+        context[i - 1u] = context[i];
+    }
+    context[history - 1u] = code;
+}
+
+static uint32_t breakout_token_ngram_context_key(
+    const uint32_t* context,
+    uint32_t context_count,
+    uint8_t expected_type
+) {
+    uint32_t hash = 2166136261u;
+
+    hash = breakout_token_hash_mix(hash, expected_type);
+    for (uint32_t i = 0u; i < context_count; i++) {
+        hash = breakout_token_hash_mix(hash, context[i]);
+    }
+    return hash == 0u ? 1u : hash;
+}
+
+static BreakoutPufferlibTokenNgramEntry* breakout_token_ngram_entry(
+    BreakoutPufferlibTokenPolicy* policy,
+    uint32_t key,
+    uint8_t create
+) {
+    uint32_t start;
+
+    if (!policy || key == 0u) {
+        return NULL;
+    }
+    start = key % BREAKOUT_PUFFERLIB_TOKEN_NGRAM_ENTRIES;
+    for (uint32_t probe = 0u; probe < 32u; probe++) {
+        uint32_t index = (start + probe) % BREAKOUT_PUFFERLIB_TOKEN_NGRAM_ENTRIES;
+        BreakoutPufferlibTokenNgramEntry* entry = &policy->ngram_entries[index];
+
+        if (entry->used && entry->key == key) {
+            return entry;
+        }
+        if (!entry->used) {
+            if (!create) {
+                return NULL;
+            }
+            memset(entry, 0, sizeof(*entry));
+            entry->used = 1u;
+            entry->key = key;
+            return entry;
+        }
+    }
+    if (create) {
+        BreakoutPufferlibTokenNgramEntry* entry = &policy->ngram_entries[start];
+        memset(entry, 0, sizeof(*entry));
+        entry->used = 1u;
+        entry->key = key;
+        return entry;
+    }
+    return NULL;
+}
+
+static void breakout_token_ngram_update_obs(BreakoutPufferlibTokenNgramEntry* entry, uint16_t token) {
+    if (!entry) {
+        return;
+    }
+    for (uint32_t i = 0u; i < BREAKOUT_PUFFERLIB_TOKEN_NGRAM_OBS_CANDIDATES; i++) {
+        if (entry->obs_counts[i] > 0u && entry->obs_tokens[i] == token) {
+            if (entry->obs_counts[i] < 0xffffu) {
+                entry->obs_counts[i]++;
+            }
+            return;
+        }
+    }
+    for (uint32_t i = 0u; i < BREAKOUT_PUFFERLIB_TOKEN_NGRAM_OBS_CANDIDATES; i++) {
+        if (entry->obs_counts[i] == 0u) {
+            entry->obs_tokens[i] = token;
+            entry->obs_counts[i] = 1u;
+            return;
+        }
+    }
+    for (uint32_t i = 0u; i < BREAKOUT_PUFFERLIB_TOKEN_NGRAM_OBS_CANDIDATES; i++) {
+        entry->obs_counts[i]--;
+    }
+}
+
+static uint16_t breakout_token_ngram_predict_obs(const BreakoutPufferlibTokenNgramEntry* entry) {
+    uint32_t best = 0u;
+
+    if (!entry) {
+        return 0u;
+    }
+    for (uint32_t i = 1u; i < BREAKOUT_PUFFERLIB_TOKEN_NGRAM_OBS_CANDIDATES; i++) {
+        if (entry->obs_counts[i] > entry->obs_counts[best]) {
+            best = i;
+        }
+    }
+    return entry->obs_tokens[best];
+}
+
+static void breakout_token_ngram_update_action(BreakoutPufferlibTokenNgramEntry* entry, uint8_t action) {
+    if (!entry || action >= TKM_PUFFERLIB_BREAKOUT_ACTION_COUNT) {
+        return;
+    }
+    if (entry->action_counts[action] < 0xffffu) {
+        entry->action_counts[action]++;
+    }
+}
+
+static uint8_t breakout_token_ngram_predict_action(const BreakoutPufferlibTokenNgramEntry* entry) {
+    uint8_t best = 0u;
+
+    if (!entry) {
+        return 0u;
+    }
+    for (uint8_t action = 1u; action < TKM_PUFFERLIB_BREAKOUT_ACTION_COUNT; action++) {
+        if (entry->action_counts[action] > entry->action_counts[best]) {
+            best = action;
+        }
+    }
+    return best;
+}
+
+static uint8_t breakout_token_ngram_predict_action_with_prior(
+    const BreakoutPufferlibTokenPolicy* policy,
+    const BreakoutPufferlibTokenNgramEntry* entry
+) {
+    uint8_t best = breakout_token_ngram_predict_action(entry);
+    uint32_t best_count = entry ? entry->action_counts[best] : 0u;
+
+    if (!policy || best_count > 0u) {
+        return best;
+    }
+    best = 0u;
+    for (uint8_t action = 1u; action < TKM_PUFFERLIB_BREAKOUT_ACTION_COUNT; action++) {
+        if (policy->ngram_action_prior[action] > policy->ngram_action_prior[best]) {
+            best = action;
+        }
+    }
+    return best;
+}
+
+static uint16_t breakout_token_obs_stream_token(
+    const BreakoutPufferlibTokenPolicy* policy,
+    uint32_t selected_index,
+    uint8_t token
+) {
+    return (uint16_t)(selected_index * policy->bin_count + (uint32_t)token);
+}
+
+static int breakout_token_ngram_predict_action_from_context(
+    BreakoutPufferlibTokenPolicy* policy,
+    const uint32_t* context,
+    uint32_t context_count,
+    uint8_t* out_action
+) {
+    uint32_t key;
+    BreakoutPufferlibTokenNgramEntry* entry;
+
+    if (!policy || !context || !out_action) {
+        return TKM_ERR;
+    }
+    key = breakout_token_ngram_context_key(context, context_count, TKM_SEQUENCE_ACTION);
+    entry = breakout_token_ngram_entry(policy, key, 0u);
+    *out_action = breakout_token_ngram_predict_action_with_prior(policy, entry);
+    return TKM_OK;
+}
+
+static int breakout_token_ngram_pass(
+    BreakoutPufferlibTokenPolicy* policy,
+    const TkmFloatTransitionDataset* dataset,
+    const BreakoutPufferlibTokenConfig* config,
+    uint8_t train,
+    uint32_t* out_train_rows,
+    uint32_t* out_heldout_rows,
+    uint32_t* out_obs_correct,
+    uint32_t* out_obs_total,
+    uint32_t* out_action_correct,
+    uint32_t* out_action_total
+) {
+    uint32_t context[BREAKOUT_PUFFERLIB_TOKEN_HISTORY];
+    uint32_t context_count = 0u;
+    uint32_t train_rows = 0u;
+    uint32_t heldout_rows = 0u;
+    uint32_t obs_correct = 0u;
+    uint32_t obs_total = 0u;
+    uint32_t action_correct = 0u;
+    uint32_t action_total = 0u;
+    int32_t prev_env = -1;
+    int32_t prev_episode = -1;
+
+    if (!policy || !breakout_dataset_ready(dataset) || !config) {
+        return TKM_ERR;
+    }
+    breakout_token_stream_context_reset(context, &context_count);
+    for (uint32_t row_index = 0u; row_index < dataset->row_count; row_index++) {
+        const TkmFloatTransition* row = &dataset->rows[row_index];
+        uint8_t obs_tokens[BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS];
+        uint8_t heldout;
+
+        if (!breakout_transition_row_ready(row)) {
+            return TKM_ERR;
+        }
+        if (row->env_index != prev_env || row->episode != prev_episode) {
+            breakout_token_stream_context_reset(context, &context_count);
+            breakout_token_stream_context_push(
+                context,
+                &context_count,
+                policy->history,
+                breakout_token_stream_code(TKM_SEQUENCE_BOS, 0u));
+            prev_env = row->env_index;
+            prev_episode = row->episode;
+        }
+        if (breakout_token_make_selected_tokens(policy, row->obs, obs_tokens) != TKM_OK) {
+            return TKM_ERR;
+        }
+        heldout = breakout_is_heldout(row_index, config->heldout_stride) ? 1u : 0u;
+        if (heldout) {
+            heldout_rows++;
+        } else {
+            train_rows++;
+        }
+
+        for (uint32_t i = 0u; i < policy->selected_dim_count; i++) {
+            uint16_t token = breakout_token_obs_stream_token(policy, i, obs_tokens[i]);
+            uint32_t key = breakout_token_ngram_context_key(context, context_count, TKM_SEQUENCE_OBS);
+            BreakoutPufferlibTokenNgramEntry* entry = breakout_token_ngram_entry(policy, key, train && !heldout);
+
+            if (train) {
+                if (!heldout) {
+                    breakout_token_ngram_update_obs(entry, token);
+                }
+            } else if (heldout) {
+                if (breakout_token_ngram_predict_obs(entry) == token) {
+                    obs_correct++;
+                }
+                obs_total++;
+            }
+            breakout_token_stream_context_push(
+                context,
+                &context_count,
+                policy->history,
+                breakout_token_stream_code(TKM_SEQUENCE_OBS, token));
+        }
+
+        {
+            uint32_t key = breakout_token_ngram_context_key(context, context_count, TKM_SEQUENCE_ACTION);
+            BreakoutPufferlibTokenNgramEntry* entry = breakout_token_ngram_entry(policy, key, train && !heldout);
+
+            if (train) {
+                if (!heldout) {
+                    breakout_token_ngram_update_action(entry, row->action);
+                    policy->ngram_action_prior[row->action]++;
+                }
+            } else if (heldout) {
+                if (breakout_token_ngram_predict_action_with_prior(policy, entry) == row->action) {
+                    action_correct++;
+                }
+                action_total++;
+            }
+            breakout_token_stream_context_push(
+                context,
+                &context_count,
+                policy->history,
+                breakout_token_stream_code(TKM_SEQUENCE_ACTION, row->action));
+        }
+    }
+
+    if (out_train_rows) {
+        *out_train_rows = train_rows;
+    }
+    if (out_heldout_rows) {
+        *out_heldout_rows = heldout_rows;
+    }
+    if (out_obs_correct) {
+        *out_obs_correct = obs_correct;
+    }
+    if (out_obs_total) {
+        *out_obs_total = obs_total;
+    }
+    if (out_action_correct) {
+        *out_action_correct = action_correct;
+    }
+    if (out_action_total) {
+        *out_action_total = action_total;
+    }
+    return TKM_OK;
+}
+
 static int breakout_token_predict_with_history(
     const BreakoutPufferlibTokenPolicy* policy,
     const float* obs,
@@ -1246,6 +1594,14 @@ static int breakout_token_select_dims(
 }
 
 static int breakout_token_policy_ready(const BreakoutPufferlibTokenPolicy* policy) {
+    uint8_t head_ok;
+
+    if (!policy) {
+        return 0;
+    }
+    head_ok = policy->model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM ?
+        policy->head_kind == BREAKOUT_PUFFERLIB_TOKEN_HEAD_TYPED_NEXT_TOKEN :
+        policy->head_kind == BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL;
     return policy &&
         policy->bin_count > 0u &&
         policy->bin_count <= BREAKOUT_PUFFERLIB_TOKEN_MAX_BINS &&
@@ -1253,7 +1609,7 @@ static int breakout_token_policy_ready(const BreakoutPufferlibTokenPolicy* polic
         policy->selected_dim_count <= BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS &&
         policy->history <= BREAKOUT_PUFFERLIB_TOKEN_HISTORY &&
         policy->model_kind != BREAKOUT_PUFFERLIB_TOKEN_MODEL_UNSPECIFIED &&
-        policy->head_kind == BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL;
+        head_ok;
 }
 
 int breakout_pufferlib_token_config_from_ini(
@@ -1264,10 +1620,12 @@ int breakout_pufferlib_token_config_from_ini(
     const char* layout_predict;
     const char* tokenizer_kind;
     const char* tokenizer_selection;
+    const char* action_tokenizer_kind;
     const char* model_kind;
     const char* head_kind;
     int32_t parsed_i32 = 0;
     float parsed_f32 = 0.0f;
+    uint8_t autoregressive_config = 0u;
 
     if (!ini || !out) {
         return TKM_ERR;
@@ -1278,17 +1636,35 @@ int breakout_pufferlib_token_config_from_ini(
     layout_predict = tkm_ini_get(ini, "sequence_layout", "predict", "action");
     tokenizer_kind = tkm_ini_get(ini, "tokenizer.observation", "kind", "selected_continuous");
     tokenizer_selection = tkm_ini_get(ini, "tokenizer.observation", "selection", "action_separation");
+    action_tokenizer_kind = tkm_ini_get(ini, "tokenizer.action", "kind", "categorical");
     model_kind = tkm_ini_get(ini, "sequence_model", "kind", "mlp_window");
     head_kind = tkm_ini_get(ini, "action_head", "kind", "categorical");
 
-    if (strcmp(layout_kind, "obs_action_interleaved") != 0 ||
-        strcmp(layout_predict, "action") != 0 ||
-        strcmp(tokenizer_kind, "selected_continuous") != 0 ||
-        strcmp(tokenizer_selection, "action_separation") != 0) {
-        return TKM_ERR;
-    }
     if (breakout_token_model_kind_from_string(model_kind, &out->model_kind) != TKM_OK ||
         breakout_token_head_kind_from_string(head_kind, &out->head_kind) != TKM_OK) {
+        return TKM_ERR;
+    }
+    autoregressive_config =
+        out->model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM ||
+        out->head_kind == BREAKOUT_PUFFERLIB_TOKEN_HEAD_TYPED_NEXT_TOKEN ||
+        strcmp(layout_kind, "autoregressive_obs_action") == 0 ||
+        strcmp(layout_predict, "next_token") == 0;
+
+    if (autoregressive_config) {
+        if (strcmp(layout_kind, "autoregressive_obs_action") != 0 ||
+            strcmp(layout_predict, "next_token") != 0 ||
+            strcmp(tokenizer_kind, "selected_quantized") != 0 ||
+            strcmp(tokenizer_selection, "action_separation") != 0 ||
+            strcmp(action_tokenizer_kind, "categorical") != 0 ||
+            out->model_kind != BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM ||
+            out->head_kind != BREAKOUT_PUFFERLIB_TOKEN_HEAD_TYPED_NEXT_TOKEN) {
+            return TKM_ERR;
+        }
+    } else if (strcmp(layout_kind, "obs_action_interleaved") != 0 ||
+        strcmp(layout_predict, "action") != 0 ||
+        strcmp(tokenizer_kind, "selected_continuous") != 0 ||
+        strcmp(tokenizer_selection, "action_separation") != 0 ||
+        out->head_kind != BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL) {
         return TKM_ERR;
     }
 
@@ -1341,6 +1717,11 @@ int breakout_pufferlib_token_config_from_ini(
         parsed_i32 != (int32_t)TKM_PUFFERLIB_BREAKOUT_ACTION_COUNT) {
         return TKM_ERR;
     }
+    if (autoregressive_config &&
+        (tkm_ini_get_i32(ini, "tokenizer.action", "actions", 3, &parsed_i32) != TKM_OK ||
+            parsed_i32 != (int32_t)TKM_PUFFERLIB_BREAKOUT_ACTION_COUNT)) {
+        return TKM_ERR;
+    }
 
     out->heldout_stride = 5u;
     out->use_pair_features = 1u;
@@ -1379,9 +1760,11 @@ int breakout_pufferlib_token_policy_train(
         config->history > BREAKOUT_PUFFERLIB_TOKEN_HISTORY ||
         (config->model_kind != BREAKOUT_PUFFERLIB_TOKEN_MODEL_UNSPECIFIED &&
             config->model_kind != BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW &&
-            config->model_kind != BREAKOUT_PUFFERLIB_TOKEN_MODEL_LINEAR_POLICY) ||
+            config->model_kind != BREAKOUT_PUFFERLIB_TOKEN_MODEL_LINEAR_POLICY &&
+            config->model_kind != BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM) ||
         (config->head_kind != BREAKOUT_PUFFERLIB_TOKEN_HEAD_UNSPECIFIED &&
-            config->head_kind != BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL)) {
+            config->head_kind != BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL &&
+            config->head_kind != BREAKOUT_PUFFERLIB_TOKEN_HEAD_TYPED_NEXT_TOKEN)) {
         return TKM_ERR;
     }
     legacy_config =
@@ -1441,6 +1824,75 @@ int breakout_pufferlib_token_policy_train(
     }
     if (breakout_token_select_dims(policy, sums, sum_squares, action_sums, action_counts) != TKM_OK) {
         return TKM_ERR;
+    }
+    if (policy->model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM) {
+        uint32_t obs_correct = 0u;
+        uint32_t obs_total = 0u;
+        uint32_t action_correct = 0u;
+        uint32_t action_total = 0u;
+
+        memset(policy->ngram_entries, 0, sizeof(policy->ngram_entries));
+        for (uint32_t epoch = 0u; epoch < config->epochs; epoch++) {
+            if (breakout_token_ngram_pass(
+                    policy,
+                    dataset,
+                    config,
+                    1u,
+                    &train_rows,
+                    &heldout_rows,
+                    NULL,
+                    NULL,
+                    NULL,
+                    NULL) != TKM_OK) {
+                return TKM_ERR;
+            }
+        }
+        if (breakout_token_ngram_pass(
+                policy,
+                dataset,
+                config,
+                0u,
+                &train_rows,
+                &heldout_rows,
+                &obs_correct,
+                &obs_total,
+                &action_correct,
+                &action_total) != TKM_OK ||
+            train_rows == 0u ||
+            heldout_rows == 0u ||
+            obs_total == 0u ||
+            action_total == 0u) {
+            return TKM_ERR;
+        }
+
+        breakout_pufferlib_token_policy_reset(policy);
+        report->source_rows = dataset->row_count;
+        report->train_rows = train_rows;
+        report->heldout_rows = heldout_rows;
+        report->heldout_accuracy = (float)action_correct / (float)action_total;
+        report->obs_token_accuracy = (float)obs_correct / (float)obs_total;
+        report->action_token_accuracy = (float)action_correct / (float)action_total;
+        report->bin_count = policy->bin_count;
+        report->selected_dim_count = policy->selected_dim_count;
+        if (breakout_copy_name(
+                report->sequence_layout_name,
+                BREAKOUT_PUFFERLIB_LAYER_NAME_MAX,
+                breakout_token_layout_name(policy->model_kind)) != TKM_OK ||
+            breakout_copy_name(
+                report->observation_tokenizer_name,
+                BREAKOUT_PUFFERLIB_LAYER_NAME_MAX,
+                breakout_token_observation_tokenizer_name(policy->model_kind)) != TKM_OK ||
+            breakout_copy_name(
+                report->sequence_model_name,
+                BREAKOUT_PUFFERLIB_LAYER_NAME_MAX,
+                breakout_token_model_name(policy->model_kind)) != TKM_OK ||
+            breakout_copy_name(
+                report->action_head_name,
+                BREAKOUT_PUFFERLIB_LAYER_NAME_MAX,
+                breakout_token_head_name(policy->head_kind)) != TKM_OK) {
+            return TKM_ERR;
+        }
+        return TKM_OK;
     }
     if (policy->use_mlp) {
         if (breakout_token_mlp_init(policy) != TKM_OK) {
@@ -1597,16 +2049,18 @@ int breakout_pufferlib_token_policy_train(
     report->train_rows = train_rows;
     report->heldout_rows = heldout_rows;
     report->heldout_accuracy = (float)heldout_correct / (float)heldout_rows;
+    report->obs_token_accuracy = 0.0f;
+    report->action_token_accuracy = report->heldout_accuracy;
     report->bin_count = policy->bin_count;
     report->selected_dim_count = policy->selected_dim_count;
     if (breakout_copy_name(
             report->sequence_layout_name,
             BREAKOUT_PUFFERLIB_LAYER_NAME_MAX,
-            "obs_action_interleaved") != TKM_OK ||
+            breakout_token_layout_name(policy->model_kind)) != TKM_OK ||
         breakout_copy_name(
             report->observation_tokenizer_name,
             BREAKOUT_PUFFERLIB_LAYER_NAME_MAX,
-            "selected_continuous") != TKM_OK ||
+            breakout_token_observation_tokenizer_name(policy->model_kind)) != TKM_OK ||
         breakout_copy_name(
             report->sequence_model_name,
             BREAKOUT_PUFFERLIB_LAYER_NAME_MAX,
@@ -1626,6 +2080,14 @@ int breakout_pufferlib_token_policy_reset(BreakoutPufferlibTokenPolicy* policy) 
     }
     breakout_token_history_reset(policy->prev_actions, &policy->prev_action_count);
     breakout_token_obs_history_reset(policy->prev_obs_values, &policy->prev_obs_count);
+    breakout_token_stream_context_reset(policy->stream_context, &policy->stream_context_count);
+    if (policy->model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM) {
+        breakout_token_stream_context_push(
+            policy->stream_context,
+            &policy->stream_context_count,
+            policy->history,
+            breakout_token_stream_code(TKM_SEQUENCE_BOS, 0u));
+    }
     return TKM_OK;
 }
 
@@ -1643,6 +2105,29 @@ int breakout_pufferlib_token_policy_predict(
     if (breakout_token_make_selected_tokens(policy, obs, current_obs_tokens) != TKM_OK ||
         breakout_token_make_selected_values(policy, obs, current_obs_values) != TKM_OK) {
         return TKM_ERR;
+    }
+    if (policy->model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM) {
+        for (uint32_t i = 0u; i < policy->selected_dim_count; i++) {
+            uint16_t token = breakout_token_obs_stream_token(policy, i, current_obs_tokens[i]);
+            breakout_token_stream_context_push(
+                policy->stream_context,
+                &policy->stream_context_count,
+                policy->history,
+                breakout_token_stream_code(TKM_SEQUENCE_OBS, token));
+        }
+        if (breakout_token_ngram_predict_action_from_context(
+                policy,
+                policy->stream_context,
+                policy->stream_context_count,
+                out_action) != TKM_OK) {
+            return TKM_ERR;
+        }
+        breakout_token_stream_context_push(
+            policy->stream_context,
+            &policy->stream_context_count,
+            policy->history,
+            breakout_token_stream_code(TKM_SEQUENCE_ACTION, *out_action));
+        return TKM_OK;
     }
     if (breakout_token_predict_with_history(
             policy,

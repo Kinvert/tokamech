@@ -119,6 +119,9 @@ static int load_token_config(
 }
 
 static const char* token_result_name(const BreakoutPufferlibTokenReport* report, uint8_t top1) {
+    if (report && strcmp(report->sequence_model_name, "token_ngram") == 0) {
+        return top1 ? "token_ngram_top1" : "token_ngram_all";
+    }
     if (report && strcmp(report->sequence_model_name, "linear_policy") == 0) {
         return top1 ? "token_linear_policy_top1" : "token_linear_policy_all";
     }
@@ -615,11 +618,13 @@ int main(int argc, char** argv) {
         token_report.observation_tokenizer_name,
         token_report.sequence_model_name,
         token_report.action_head_name);
-    printf("token_train rows=%u train_rows=%u heldout_rows=%u heldout_accuracy=%.3f bins=%u dims=%u history=%u epochs=%u learning_rate=%.5f input_dim=%u hidden=%u pair_features=%u\n",
+    printf("token_train rows=%u train_rows=%u heldout_rows=%u heldout_accuracy=%.3f obs_token_accuracy=%.3f action_token_accuracy=%.3f bins=%u dims=%u history=%u epochs=%u learning_rate=%.5f input_dim=%u hidden=%u pair_features=%u\n",
         token_report.source_rows,
         token_report.train_rows,
         token_report.heldout_rows,
         token_report.heldout_accuracy,
+        token_report.obs_token_accuracy,
+        token_report.action_token_accuracy,
         token_report.bin_count,
         token_report.selected_dim_count,
         token_policy.history,
@@ -654,11 +659,13 @@ int main(int argc, char** argv) {
         token_top1_report.observation_tokenizer_name,
         token_top1_report.sequence_model_name,
         token_top1_report.action_head_name);
-    printf("token_top1_train rows=%u train_rows=%u heldout_rows=%u heldout_accuracy=%.3f bins=%u dims=%u history=%u epochs=%u learning_rate=%.5f input_dim=%u hidden=%u pair_features=%u\n",
+    printf("token_top1_train rows=%u train_rows=%u heldout_rows=%u heldout_accuracy=%.3f obs_token_accuracy=%.3f action_token_accuracy=%.3f bins=%u dims=%u history=%u epochs=%u learning_rate=%.5f input_dim=%u hidden=%u pair_features=%u\n",
         token_top1_report.source_rows,
         token_top1_report.train_rows,
         token_top1_report.heldout_rows,
         token_top1_report.heldout_accuracy,
+        token_top1_report.obs_token_accuracy,
+        token_top1_report.action_token_accuracy,
         token_top1_report.bin_count,
         token_top1_report.selected_dim_count,
         token_top1_policy.history,
