@@ -79,6 +79,7 @@ Robot deployment should be a follow-up milestone after the token/data/training/r
 - `53-snake-config-runtime-render.md`: project-local runtime helper and Raylib renderer bridge for the configured Snake policy.
 - `54-pufferlib-breakout-jsonl-benchmark.md`: PufferLib Breakout JSONL exporter fix, cleaned 100k-row dataset, no-render benchmark, and trained intercept policy result.
 - `55-pufferlib-breakout-token-mlp.md`: generic PufferLib Breakout token MLP policy, no-render rollout results, and render default update.
+- `56-pufferlib-breakout-layered-token-stack.md`: INI-selected PufferLib Breakout token stack with `mlp_window` as the known-good backend and `linear_policy` as a swappable backend proof.
 
 ## Core architectural opinion
 

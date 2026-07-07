@@ -1,6 +1,6 @@
 # Breakout
 
-`projects/breakout` is a Tokamech token-policy clone of PufferLib's `ocean/breakout` environment.
+`projects/breakout` contains Tokamech Breakout experiments and the Tokamech-side PufferLib Breakout policy bridge.
 
 It keeps the important PufferLib shape:
 
@@ -12,7 +12,7 @@ observations: 10 scalar features + 108 brick states = 118 floats
 renderer: RayLib
 ```
 
-Instead of RL/PufferNet, Phase 1 uses Tokamech's current token path:
+The original standalone proof uses Tokamech's local token path:
 
 ```text
 flat Breakout observations
@@ -20,6 +20,32 @@ flat Breakout observations
 -> oracle token trajectories
 -> lookup/count policy
 -> closed-loop runtime
+```
+
+The current PufferLib bridge uses literal PufferLib Breakout JSONL as the source of truth:
+
+```text
+PufferLib Breakout JSONL
+-> selected continuous observation tokens
+-> obs/action history
+-> config-selected sequence model
+-> categorical action token
+-> PufferLib Breakout c_step
+```
+
+Config-selected token stacks:
+
+```text
+projects/breakout/pufferlib_token_mlp.ini
+projects/breakout/pufferlib_token_linear.ini
+```
+
+Headless PufferLib benchmark:
+
+```sh
+make build/pufferlib_breakout_benchmark
+TKM_PUFFERLIB_BREAKOUT_CONFIG=projects/breakout/pufferlib_token_mlp.ini \
+./build/pufferlib_breakout_benchmark
 ```
 
 Run headless tests:

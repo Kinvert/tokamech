@@ -18,6 +18,9 @@
 #define DEFAULT_MAX_STEPS 24000u
 #define DEFAULT_WINDOW_RADIUS 2048u
 #define DEFAULT_REANCHOR_INTERVAL 32u
+#define DEFAULT_TOKEN_CONFIG_PATH "projects/breakout/pufferlib_token_mlp.ini"
+
+static uint32_t g_configured_frameskip = 1u;
 
 typedef enum {
     BENCH_METHOD_MLP = 0,
@@ -79,10 +82,53 @@ static int make_dir_if_needed(const char* path) {
     return TKM_ERR;
 }
 
+static int read_ini_u32(const TkmIni* ini, const char* section, const char* key, uint32_t fallback, uint32_t* out) {
+    int32_t parsed = 0;
+
+    if (!out) {
+        return TKM_ERR;
+    }
+    if (tkm_ini_get_i32(ini, section, key, (int32_t)fallback, &parsed) != TKM_OK || parsed < 0) {
+        return TKM_ERR;
+    }
+    *out = (uint32_t)parsed;
+    return TKM_OK;
+}
+
+static int load_token_config(
+    const char* path,
+    TkmIni* ini,
+    BreakoutPufferlibTokenConfig* config,
+    const char** out_dataset_path,
+    uint32_t* out_frameskip
+) {
+    uint32_t frameskip = 4u;
+
+    if (!path || !ini || !config || !out_dataset_path || !out_frameskip) {
+        return TKM_ERR;
+    }
+    if (tkm_ini_parse_file(ini, path) != TKM_OK ||
+        breakout_pufferlib_token_config_from_ini(ini, config) != TKM_OK ||
+        read_ini_u32(ini, "breakout.pufferlib", "frameskip", 4u, &frameskip) != TKM_OK ||
+        frameskip == 0u) {
+        return TKM_ERR;
+    }
+    *out_dataset_path = tkm_ini_get(ini, "breakout.pufferlib", "dataset", "");
+    *out_frameskip = frameskip;
+    return TKM_OK;
+}
+
+static const char* token_result_name(const BreakoutPufferlibTokenReport* report, uint8_t top1) {
+    if (report && strcmp(report->sequence_model_name, "linear_policy") == 0) {
+        return top1 ? "token_linear_policy_top1" : "token_linear_policy_all";
+    }
+    return top1 ? "token_mlp_top1" : "token_mlp_all";
+}
+
 static Breakout make_eval_env(uint32_t seed) {
     Breakout env = {
         .client = NULL,
-        .frameskip = (int)read_u32_env("TKM_PUFFERLIB_BREAKOUT_FRAMESKIP", 1u),
+        .frameskip = (int)read_u32_env("TKM_PUFFERLIB_BREAKOUT_FRAMESKIP", g_configured_frameskip),
         .width = 576,
         .height = 330,
         .initial_paddle_width = 62,
@@ -433,16 +479,15 @@ static int eval_dataset_replay(
 }
 
 int main(int argc, char** argv) {
+    const char* config_path = getenv("TKM_PUFFERLIB_BREAKOUT_CONFIG");
     const char* jsonl_path = argc > 1 ? argv[1] : getenv("TKM_PUFFERLIB_BREAKOUT_JSONL");
+    const char* config_dataset_path = "";
     const char* out_dir = argc > 2 ? argv[2] : "/tmp/tkm_breakout_policy_benchmark";
     uint32_t eval_episodes = read_u32_env("TKM_PUFFERLIB_BREAKOUT_EVAL_EPISODES", DEFAULT_EVAL_EPISODES);
     uint32_t max_steps = read_u32_env("TKM_PUFFERLIB_BREAKOUT_MAX_STEPS", DEFAULT_MAX_STEPS);
     uint32_t seed = read_u32_env("TKM_PUFFERLIB_BREAKOUT_EVAL_SEED", 0u);
     uint32_t hidden = read_u32_env("TKM_PUFFERLIB_BREAKOUT_MLP_HIDDEN", 8u);
     uint32_t epochs = read_u32_env("TKM_PUFFERLIB_BREAKOUT_MLP_EPOCHS", 12u);
-    uint32_t token_bins = read_u32_env("TKM_PUFFERLIB_BREAKOUT_TOKEN_BINS", 16u);
-    uint32_t token_dims = read_u32_env("TKM_PUFFERLIB_BREAKOUT_TOKEN_DIMS", 16u);
-    uint32_t token_epochs = read_u32_env("TKM_PUFFERLIB_BREAKOUT_TOKEN_EPOCHS", 80u);
     uint32_t window_radius = read_u32_env("TKM_PUFFERLIB_BREAKOUT_WINDOW_RADIUS", DEFAULT_WINDOW_RADIUS);
     uint32_t reanchor = read_u32_env("TKM_PUFFERLIB_BREAKOUT_REANCHOR_INTERVAL", DEFAULT_REANCHOR_INTERVAL);
     float sequence_distance = (float)read_u32_env("TKM_PUFFERLIB_BREAKOUT_SEQUENCE_DISTANCE_MILLI", 500u) / 1000.0f;
@@ -450,6 +495,7 @@ int main(int argc, char** argv) {
     float intercept_aim = ((float)((int32_t)read_u32_env("TKM_PUFFERLIB_BREAKOUT_INTERCEPT_AIM_MILLI", 0u))) / 1000.0f;
     static TkmFloatTransitionDataset all;
     static TkmFloatTransitionDataset top1;
+    TkmIni token_ini;
     BreakoutPufferlibPolicy mlp;
     BreakoutPufferlibBcReport mlp_report;
     BreakoutPufferlibTokenPolicy token_policy;
@@ -463,6 +509,21 @@ int main(int argc, char** argv) {
     BenchResult result;
     float replay_max_obs_distance = 0.0f;
 
+    if (!config_path || config_path[0] == '\0') {
+        config_path = DEFAULT_TOKEN_CONFIG_PATH;
+    }
+    if (load_token_config(
+            config_path,
+            &token_ini,
+            &token_config,
+            &config_dataset_path,
+            &g_configured_frameskip) != TKM_OK) {
+        fprintf(stderr, "failed to load token config: %s\n", config_path);
+        return 1;
+    }
+    if (!jsonl_path || jsonl_path[0] == '\0') {
+        jsonl_path = config_dataset_path;
+    }
     if (!jsonl_path || jsonl_path[0] == '\0') {
         fprintf(stderr, "usage: %s DATASET_JSONL [OUT_DIR]\n", argv[0]);
         return 1;
@@ -477,8 +538,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    printf("pufferlib_breakout_policy_benchmark dataset=%s eval_episodes=%u max_steps=%u seed=%u\n",
-        jsonl_path, eval_episodes, max_steps, seed);
+    printf("pufferlib_breakout_policy_benchmark config=%s dataset=%s frameskip=%u eval_episodes=%u max_steps=%u seed=%u\n",
+        config_path, jsonl_path, g_configured_frameskip, eval_episodes, max_steps, seed);
 
     if (eval_dataset_replay(&all, seed, max_steps, &result, &replay_max_obs_distance) != TKM_OK) {
         fprintf(stderr, "dataset_replay failed\n");
@@ -544,25 +605,26 @@ int main(int argc, char** argv) {
     }
     print_result(&result);
 
-    token_config.bin_count = token_bins;
-    token_config.selected_dim_count = token_dims;
-    token_config.epochs = token_epochs;
-    token_config.learning_rate = 0.20f;
-    token_config.heldout_stride = 5u;
-    token_config.use_pair_features = 1u;
     if (breakout_pufferlib_token_policy_train(
             &token_policy, &all, &token_config, &token_report) != TKM_OK) {
         fprintf(stderr, "token policy training failed\n");
         return 1;
     }
-    printf("token_train rows=%u train_rows=%u heldout_rows=%u heldout_accuracy=%.3f bins=%u dims=%u epochs=%u input_dim=%u hidden=%u pair_features=%u\n",
+    printf("token_layers layout=%s tokenizer=%s model=%s head=%s\n",
+        token_report.sequence_layout_name,
+        token_report.observation_tokenizer_name,
+        token_report.sequence_model_name,
+        token_report.action_head_name);
+    printf("token_train rows=%u train_rows=%u heldout_rows=%u heldout_accuracy=%.3f bins=%u dims=%u history=%u epochs=%u learning_rate=%.5f input_dim=%u hidden=%u pair_features=%u\n",
         token_report.source_rows,
         token_report.train_rows,
         token_report.heldout_rows,
         token_report.heldout_accuracy,
         token_report.bin_count,
         token_report.selected_dim_count,
-        token_epochs,
+        token_policy.history,
+        token_config.epochs,
+        token_config.learning_rate,
         token_policy.token_mlp_input_dim,
         token_policy.token_mlp_hidden_dim,
         (uint32_t)token_config.use_pair_features);
@@ -576,8 +638,8 @@ int main(int argc, char** argv) {
     policy.method = BENCH_METHOD_TOKEN;
     policy.dataset = &all;
     policy.token_policy = &token_policy;
-    if (eval_policy("token_mlp_all", &policy, seed, eval_episodes, max_steps, &result) != TKM_OK) {
-        fprintf(stderr, "token_mlp_all failed\n");
+    if (eval_policy(token_result_name(&token_report, 0u), &policy, seed, eval_episodes, max_steps, &result) != TKM_OK) {
+        fprintf(stderr, "%s failed\n", token_result_name(&token_report, 0u));
         return 1;
     }
     print_result(&result);
@@ -587,14 +649,21 @@ int main(int argc, char** argv) {
         fprintf(stderr, "token top1 policy training failed\n");
         return 1;
     }
-    printf("token_top1_train rows=%u train_rows=%u heldout_rows=%u heldout_accuracy=%.3f bins=%u dims=%u epochs=%u input_dim=%u hidden=%u pair_features=%u\n",
+    printf("token_top1_layers layout=%s tokenizer=%s model=%s head=%s\n",
+        token_top1_report.sequence_layout_name,
+        token_top1_report.observation_tokenizer_name,
+        token_top1_report.sequence_model_name,
+        token_top1_report.action_head_name);
+    printf("token_top1_train rows=%u train_rows=%u heldout_rows=%u heldout_accuracy=%.3f bins=%u dims=%u history=%u epochs=%u learning_rate=%.5f input_dim=%u hidden=%u pair_features=%u\n",
         token_top1_report.source_rows,
         token_top1_report.train_rows,
         token_top1_report.heldout_rows,
         token_top1_report.heldout_accuracy,
         token_top1_report.bin_count,
         token_top1_report.selected_dim_count,
-        token_epochs,
+        token_top1_policy.history,
+        token_config.epochs,
+        token_config.learning_rate,
         token_top1_policy.token_mlp_input_dim,
         token_top1_policy.token_mlp_hidden_dim,
         (uint32_t)token_config.use_pair_features);
@@ -608,8 +677,8 @@ int main(int argc, char** argv) {
     policy.method = BENCH_METHOD_TOKEN;
     policy.dataset = &top1;
     policy.token_policy = &token_top1_policy;
-    if (eval_policy("token_mlp_top1", &policy, seed, eval_episodes, max_steps, &result) != TKM_OK) {
-        fprintf(stderr, "token_mlp_top1 failed\n");
+    if (eval_policy(token_result_name(&token_top1_report, 1u), &policy, seed, eval_episodes, max_steps, &result) != TKM_OK) {
+        fprintf(stderr, "%s failed\n", token_result_name(&token_top1_report, 1u));
         return 1;
     }
     print_result(&result);

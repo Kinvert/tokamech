@@ -3,16 +3,30 @@
 
 #include <stdint.h>
 
+#include "core/config/ini.h"
 #include "core/common/status.h"
 #include "core/dataset/float_transition.h"
 #include "core/model/mlp_window.h"
 
 #define BREAKOUT_PUFFERLIB_POLICY_MAX_HIDDEN 32u
 #define BREAKOUT_PUFFERLIB_POLICY_MAX_FILTER_NAME 32u
+#define BREAKOUT_PUFFERLIB_LAYER_NAME_MAX 32u
 #define BREAKOUT_PUFFERLIB_TOKEN_MAX_BINS 32u
 #define BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS 24u
 #define BREAKOUT_PUFFERLIB_TOKEN_HISTORY 8u
 #define BREAKOUT_PUFFERLIB_TOKEN_FEATURES 65536u
+#define BREAKOUT_PUFFERLIB_TOKEN_DEFAULT_MLP_HIDDEN 64u
+
+typedef enum {
+    BREAKOUT_PUFFERLIB_TOKEN_MODEL_UNSPECIFIED = 0,
+    BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW = 1,
+    BREAKOUT_PUFFERLIB_TOKEN_MODEL_LINEAR_POLICY = 2
+} BreakoutPufferlibTokenModelKind;
+
+typedef enum {
+    BREAKOUT_PUFFERLIB_TOKEN_HEAD_UNSPECIFIED = 0,
+    BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL = 1
+} BreakoutPufferlibTokenHeadKind;
 
 typedef struct {
     uint32_t hidden_dim;
@@ -68,6 +82,10 @@ typedef struct {
     uint32_t epochs;
     float learning_rate;
     uint32_t heldout_stride;
+    uint32_t history;
+    BreakoutPufferlibTokenModelKind model_kind;
+    uint32_t model_hidden_dim;
+    BreakoutPufferlibTokenHeadKind head_kind;
     uint8_t use_pair_features;
 } BreakoutPufferlibTokenConfig;
 
@@ -78,6 +96,10 @@ typedef struct {
     float heldout_accuracy;
     uint32_t bin_count;
     uint32_t selected_dim_count;
+    char sequence_layout_name[BREAKOUT_PUFFERLIB_LAYER_NAME_MAX];
+    char observation_tokenizer_name[BREAKOUT_PUFFERLIB_LAYER_NAME_MAX];
+    char sequence_model_name[BREAKOUT_PUFFERLIB_LAYER_NAME_MAX];
+    char action_head_name[BREAKOUT_PUFFERLIB_LAYER_NAME_MAX];
 } BreakoutPufferlibTokenReport;
 
 typedef struct {
@@ -85,6 +107,9 @@ typedef struct {
     uint32_t selected_dim_count;
     uint8_t use_pair_features;
     uint8_t use_mlp;
+    uint32_t history;
+    BreakoutPufferlibTokenModelKind model_kind;
+    BreakoutPufferlibTokenHeadKind head_kind;
     uint32_t token_mlp_input_dim;
     uint32_t token_mlp_hidden_dim;
     uint32_t selected_dims[BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS];
@@ -165,6 +190,10 @@ int breakout_pufferlib_intercept_policy_train_grid(
     BreakoutPufferlibInterceptPolicy* policy,
     const TkmFloatTransitionDataset* dataset,
     BreakoutPufferlibInterceptReport* report
+);
+int breakout_pufferlib_token_config_from_ini(
+    const TkmIni* ini,
+    BreakoutPufferlibTokenConfig* out
 );
 int breakout_pufferlib_token_policy_train(
     BreakoutPufferlibTokenPolicy* policy,

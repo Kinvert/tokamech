@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "core/config/ini.h"
 #include "core/dataset/float_transition.h"
 #include "projects/breakout/pufferlib_policy.h"
 
@@ -434,6 +435,111 @@ static void test_breakout_token_policy_trains_next_action_from_quantized_tokens(
     CHECK(action == 2u);
 }
 
+static const char* token_mlp_ini_text(void) {
+    return
+        "[breakout.pufferlib]\n"
+        "dataset = /tmp/tkm_breakout_train_full_export_100k_v2/transitions-000000.jsonl\n"
+        "frameskip = 4\n"
+        "\n"
+        "[sequence_layout]\n"
+        "kind = obs_action_interleaved\n"
+        "history = 8\n"
+        "predict = action\n"
+        "\n"
+        "[tokenizer.observation]\n"
+        "kind = selected_continuous\n"
+        "dims = 4\n"
+        "selection = action_separation\n"
+        "\n"
+        "[sequence_model]\n"
+        "kind = mlp_window\n"
+        "hidden = 12\n"
+        "epochs = 8\n"
+        "learning_rate = 0.01\n"
+        "\n"
+        "[action_head]\n"
+        "kind = categorical\n"
+        "actions = 3\n";
+}
+
+static void make_token_relation_dataset(TkmFloatTransitionDataset* dataset) {
+    int32_t t = 0;
+
+    tkm_float_transition_dataset_init(dataset);
+    for (int32_t epoch = 0; epoch < 8; epoch++) {
+        for (int32_t a = 0; a < 9; a++) {
+            for (int32_t b = 0; b < 9; b++) {
+                add_token_relation_row(dataset, t++, (float)a / 8.0f, (float)b / 8.0f);
+            }
+        }
+    }
+}
+
+static void test_breakout_token_config_parses_layered_ini_and_trains_mlp_backend(void) {
+    static TkmFloatTransitionDataset dataset;
+    TkmIni ini;
+    BreakoutPufferlibTokenPolicy policy;
+    BreakoutPufferlibTokenConfig config;
+    BreakoutPufferlibTokenReport report;
+
+    CHECK(tkm_ini_parse(&ini, token_mlp_ini_text()) == TKM_OK);
+    CHECK(breakout_pufferlib_token_config_from_ini(&ini, &config) == TKM_OK);
+    CHECK(config.bin_count == 16u);
+    CHECK(config.selected_dim_count == 4u);
+    CHECK(config.history == 8u);
+    CHECK(config.model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW);
+    CHECK(config.model_hidden_dim == 12u);
+    CHECK(config.epochs == 8u);
+    check_close(config.learning_rate, 0.01f, 0.0001f);
+    CHECK(config.head_kind == BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL);
+
+    make_token_relation_dataset(&dataset);
+    CHECK(breakout_pufferlib_token_policy_train(&policy, &dataset, &config, &report) == TKM_OK);
+    CHECK(strcmp(report.sequence_layout_name, "obs_action_interleaved") == 0);
+    CHECK(strcmp(report.observation_tokenizer_name, "selected_continuous") == 0);
+    CHECK(strcmp(report.sequence_model_name, "mlp_window") == 0);
+    CHECK(strcmp(report.action_head_name, "categorical") == 0);
+    CHECK(policy.model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW);
+    CHECK(policy.token_mlp_hidden_dim == 12u);
+    CHECK(report.heldout_accuracy >= 0.75f);
+}
+
+static void test_breakout_token_config_selects_linear_backend_without_changing_loader_contract(void) {
+    static TkmFloatTransitionDataset dataset;
+    TkmIni ini;
+    BreakoutPufferlibTokenPolicy policy;
+    BreakoutPufferlibTokenConfig config;
+    BreakoutPufferlibTokenReport report;
+    const char* text =
+        "[sequence_layout]\n"
+        "kind = obs_action_interleaved\n"
+        "history = 8\n"
+        "predict = action\n"
+        "[tokenizer.observation]\n"
+        "kind = selected_continuous\n"
+        "dims = 4\n"
+        "selection = action_separation\n"
+        "[sequence_model]\n"
+        "kind = linear_policy\n"
+        "epochs = 8\n"
+        "learning_rate = 0.25\n"
+        "[action_head]\n"
+        "kind = categorical\n"
+        "actions = 3\n";
+
+    CHECK(tkm_ini_parse(&ini, text) == TKM_OK);
+    CHECK(breakout_pufferlib_token_config_from_ini(&ini, &config) == TKM_OK);
+    CHECK(config.model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_LINEAR_POLICY);
+    CHECK(config.selected_dim_count == 4u);
+
+    make_token_relation_dataset(&dataset);
+    CHECK(breakout_pufferlib_token_policy_train(&policy, &dataset, &config, &report) == TKM_OK);
+    CHECK(strcmp(report.sequence_model_name, "linear_policy") == 0);
+    CHECK(policy.model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_LINEAR_POLICY);
+    CHECK(policy.use_mlp == 0u);
+    CHECK(report.heldout_accuracy >= 0.75f);
+}
+
 int main(void) {
     test_breakout_policy_trains_action_classifier_and_reports_accuracy();
     test_breakout_policy_reports_filter_metadata();
@@ -445,6 +551,8 @@ int main(void) {
     test_breakout_intercept_policy_reflects_wall_intercept();
     test_breakout_intercept_policy_trains_grid_from_rows();
     test_breakout_token_policy_trains_next_action_from_quantized_tokens();
+    test_breakout_token_config_parses_layered_ini_and_trains_mlp_backend();
+    test_breakout_token_config_selects_linear_backend_without_changing_loader_contract();
     puts("breakout pufferlib policy tests passed");
     return 0;
 }
