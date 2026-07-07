@@ -327,7 +327,7 @@ int breakout_collect_oracle_tokens(TkmTrajectory* trajectory) {
         uint16_t token = breakout_make_policy_token(bucket);
         uint8_t action = breakout_oracle_action_from_token(token);
         for (int repeat = 0; repeat < 8; repeat++) {
-            if (tkm_trajectory_append(trajectory, (int16_t)token, action, 0.0f, 0) != TKM_OK) {
+            if (tkm_trajectory_append(trajectory, (int32_t)token, action, 0.0f, 0) != TKM_OK) {
                 return TKM_ERR;
             }
         }
@@ -342,7 +342,7 @@ int breakout_collect_oracle_tokens(TkmTrajectory* trajectory) {
         if (breakout_step_env(&env, action, &reward, &terminal) != TKM_OK) {
             return TKM_ERR;
         }
-        if (tkm_trajectory_append(trajectory, (int16_t)token, action, reward, terminal) != TKM_OK) {
+        if (tkm_trajectory_append(trajectory, (int32_t)token, action, reward, terminal) != TKM_OK) {
             return TKM_ERR;
         }
     }

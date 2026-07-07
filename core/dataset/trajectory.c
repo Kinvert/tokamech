@@ -4,13 +4,13 @@ void tkm_trajectory_init(TkmTrajectory* trajectory) {
     trajectory->len = 0;
 }
 
-int tkm_trajectory_append(TkmTrajectory* trajectory, int16_t obs, uint8_t action, float reward, uint8_t terminal) {
+int tkm_trajectory_append(TkmTrajectory* trajectory, int32_t obs, uint8_t action, float reward, uint8_t terminal) {
     if (trajectory->len >= TKM_TRAJECTORY_MAX_STEPS) {
         return TKM_ERR;
     }
 
     uint32_t i = trajectory->len;
-    trajectory->obs_i16[i] = obs;
+    trajectory->obs_i32[i] = obs;
     trajectory->actions[i] = action;
     trajectory->rewards[i] = reward;
     trajectory->terminals[i] = terminal ? 1u : 0u;
@@ -25,7 +25,7 @@ void tkm_trajectory_cursor_init(TkmTrajectoryCursor* cursor, const TkmTrajectory
 
 int tkm_trajectory_cursor_next(
     TkmTrajectoryCursor* cursor,
-    int16_t* obs,
+    int32_t* obs,
     uint8_t* action,
     float* reward,
     uint8_t* terminal
@@ -35,7 +35,7 @@ int tkm_trajectory_cursor_next(
     }
 
     uint32_t i = cursor->index;
-    *obs = cursor->trajectory->obs_i16[i];
+    *obs = cursor->trajectory->obs_i32[i];
     *action = cursor->trajectory->actions[i];
     *reward = cursor->trajectory->rewards[i];
     *terminal = cursor->trajectory->terminals[i];

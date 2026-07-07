@@ -6,12 +6,12 @@
 #include "core/common/status.h"
 
 typedef struct {
-    int16_t min_value;
-    int16_t max_value;
+    int32_t min_value;
+    int32_t max_value;
     uint16_t vocab_size;
 } TkmIntBins;
 
-int tkm_int_bins_init(TkmIntBins* tokenizer, int16_t min_value, int16_t max_value);
-uint16_t tkm_int_bins_encode(const TkmIntBins* tokenizer, int16_t value);
+int tkm_int_bins_init(TkmIntBins* tokenizer, int32_t min_value, int32_t max_value);
+uint16_t tkm_int_bins_encode(const TkmIntBins* tokenizer, int32_t value);
 
 #endif

@@ -40,18 +40,18 @@ static void test_centerline_oracle_collection_writes_replayable_trajectory(void)
     CHECK(centerline_collect_oracle(&cfg, &traj) == TKM_OK);
 
     CHECK(traj.len == 6);
-    CHECK(traj.obs_i16[0] == -3);
+    CHECK(traj.obs_i32[0] == -3);
     CHECK(traj.actions[0] == CENTERLINE_ACTION_RIGHT);
-    CHECK(traj.obs_i16[1] == -2);
+    CHECK(traj.obs_i32[1] == -2);
     CHECK(traj.actions[1] == CENTERLINE_ACTION_RIGHT);
-    CHECK(traj.obs_i16[2] == -1);
+    CHECK(traj.obs_i32[2] == -1);
     CHECK(traj.actions[2] == CENTERLINE_ACTION_RIGHT);
-    CHECK(traj.obs_i16[3] == 0);
+    CHECK(traj.obs_i32[3] == 0);
     CHECK(traj.actions[3] == CENTERLINE_ACTION_STAY);
     CHECK(traj.terminals[5] == 1);
 
     TkmTrajectoryCursor cursor;
-    int16_t obs = 99;
+    int32_t obs = 99;
     uint8_t action = 99;
     float reward = 0.0f;
     uint8_t terminal = 0;
@@ -129,9 +129,9 @@ static void test_runtime_closes_loop_with_trained_policy_and_decoder(void) {
     CHECK(tkm_runtime_run(&runtime, 8, &rollout) == TKM_OK);
     CHECK(env.offset == 0);
     CHECK(rollout.len == 8);
-    CHECK(rollout.obs_i16[0] == -3);
+    CHECK(rollout.obs_i32[0] == -3);
     CHECK(rollout.actions[0] == CENTERLINE_ACTION_RIGHT);
-    CHECK(rollout.obs_i16[3] == 0);
+    CHECK(rollout.obs_i32[3] == 0);
     CHECK(rollout.actions[3] == CENTERLINE_ACTION_STAY);
     CHECK(rollout.terminals[7] == 1);
 }

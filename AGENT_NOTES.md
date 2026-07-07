@@ -1,0 +1,1 @@
+- Long/overnight goals: do not run GUI/display commands like DISPLAY=:0 or render launchers. Use headless tests, benchmarks, and builds only unless Keith explicitly asks to show a display.

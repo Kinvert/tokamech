@@ -7,7 +7,7 @@
 #include "core/dataset/trajectory.h"
 #include "core/tokenizer/int_bins.h"
 
-#define TKM_LOOKUP_MAX_TOKENS 256u
+#define TKM_LOOKUP_MAX_TOKENS 65534u
 #define TKM_LOOKUP_MAX_ACTIONS 16u
 
 typedef struct {

@@ -183,6 +183,20 @@ profiling
 checkpoint IO
 ```
 
+Core mechanics must stay reusable. Do not put Snake, line-follower, Breakout, QTI, Atari, humanoid, or any other project-specific assumptions into `core/`.
+
+If a method sounds project-shaped but is actually general, name and implement the general version. For example, DAgger-style policy-induced-state training should not be `snake_dagger`. It should be a reusable trainer pattern that can ask any project for:
+
+```text
+reset/start states
+observe/features
+valid-action mask
+expert/planner label
+step(action)
+```
+
+Snake can provide those hooks from `projects/snake/`, but the reusable loop belongs in shared trainer/runtime code only after its interface is project-agnostic.
+
 ### C first, raw CUDA where it matters
 
 The hot path should use:

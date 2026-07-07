@@ -1,6 +1,6 @@
 #include "core/tokenizer/int_bins.h"
 
-int tkm_int_bins_init(TkmIntBins* tokenizer, int16_t min_value, int16_t max_value) {
+int tkm_int_bins_init(TkmIntBins* tokenizer, int32_t min_value, int32_t max_value) {
     if (max_value < min_value) {
         return TKM_ERR;
     }
@@ -16,7 +16,7 @@ int tkm_int_bins_init(TkmIntBins* tokenizer, int16_t min_value, int16_t max_valu
     return TKM_OK;
 }
 
-uint16_t tkm_int_bins_encode(const TkmIntBins* tokenizer, int16_t value) {
+uint16_t tkm_int_bins_encode(const TkmIntBins* tokenizer, int32_t value) {
     if (value < tokenizer->min_value || value > tokenizer->max_value) {
         return TKM_INVALID_TOKEN;
     }
