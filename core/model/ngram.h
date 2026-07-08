@@ -5,7 +5,7 @@
 
 #include "core/common/status.h"
 
-#define TKM_NGRAM_MAX_VOCAB 256
+#define TKM_NGRAM_MAX_VOCAB 1024
 
 typedef struct {
     uint32_t vocab_size;
@@ -14,6 +14,12 @@ typedef struct {
 
 int tkm_ngram_init(TkmNgramModel* model, uint32_t vocab_size);
 int tkm_ngram_train_sequence(TkmNgramModel* model, const uint16_t* tokens, uint32_t token_count);
+int tkm_ngram_add_weighted_transition(
+    TkmNgramModel* model,
+    uint16_t prev_token,
+    uint16_t next_token,
+    uint32_t weight
+);
 int tkm_ngram_predict_next(const TkmNgramModel* model, uint16_t prev_token, uint16_t* out_token);
 
 #endif

@@ -38,6 +38,30 @@ int tkm_ngram_train_sequence(TkmNgramModel* model, const uint16_t* tokens, uint3
     return TKM_OK;
 }
 
+int tkm_ngram_add_weighted_transition(
+    TkmNgramModel* model,
+    uint16_t prev_token,
+    uint16_t next_token,
+    uint32_t weight
+) {
+    uint32_t offset;
+
+    if (!tkm_ngram_ready(model) ||
+        prev_token >= model->vocab_size ||
+        next_token >= model->vocab_size ||
+        weight == 0u) {
+        return TKM_ERR;
+    }
+
+    offset = tkm_ngram_offset(model, prev_token, next_token);
+    if (UINT32_MAX - model->counts[offset] < weight) {
+        model->counts[offset] = UINT32_MAX;
+    } else {
+        model->counts[offset] += weight;
+    }
+    return TKM_OK;
+}
+
 int tkm_ngram_predict_next(const TkmNgramModel* model, uint16_t prev_token, uint16_t* out_token) {
     uint16_t best_token = 0;
     uint32_t best_count = 0;

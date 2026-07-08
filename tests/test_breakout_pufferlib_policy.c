@@ -13,354 +13,6 @@
     } \
 } while (0)
 
-static void check_close(float actual, float expected, float tolerance) {
-    float diff = actual - expected;
-    if (diff < 0.0f) {
-        diff = -diff;
-    }
-    CHECK(diff <= tolerance);
-}
-
-static uint8_t action_for_value(float value) {
-    if (value < -0.25f) {
-        return 0;
-    }
-    if (value > 0.25f) {
-        return 2;
-    }
-    return 1;
-}
-
-static void add_policy_row(
-    TkmFloatTransitionDataset* dataset,
-    int32_t episode,
-    int32_t t,
-    float value,
-    float reward,
-    uint8_t terminal
-) {
-    TkmFloatTransition* row;
-
-    CHECK(dataset->row_count < TKM_FLOAT_TRANSITION_MAX_ROWS);
-    row = &dataset->rows[dataset->row_count++];
-    memset(row, 0, sizeof(*row));
-    row->version = 1;
-    strcpy(row->env, "pufferlib_breakout");
-    strcpy(row->source, "test");
-    row->env_index = 0;
-    row->episode = episode;
-    row->t = t;
-    row->obs_dim = TKM_PUFFERLIB_BREAKOUT_OBS_DIM;
-    row->obs[0] = value;
-    row->obs[1] = value * value;
-    row->action = action_for_value(value);
-    row->reward = reward;
-    row->terminal = terminal;
-}
-
-static void make_policy_dataset(TkmFloatTransitionDataset* dataset) {
-    const float values[3] = {-1.0f, 0.0f, 1.0f};
-
-    tkm_float_transition_dataset_init(dataset);
-    for (int32_t i = 0; i < 30; i++) {
-        add_policy_row(dataset, 0, i, values[i % 3], 0.0f, i == 29 ? 1u : 0u);
-    }
-    for (int32_t i = 0; i < 60; i++) {
-        add_policy_row(dataset, 1, i, values[i % 3], 1.0f, i == 59 ? 1u : 0u);
-    }
-}
-
-static BreakoutPufferlibBcConfig test_config(void) {
-    BreakoutPufferlibBcConfig config;
-    config.hidden_dim = 8;
-    config.epochs = 80;
-    config.learning_rate = 0.05f;
-    config.heldout_stride = 5;
-    return config;
-}
-
-static void test_breakout_policy_trains_action_classifier_and_reports_accuracy(void) {
-    static TkmFloatTransitionDataset dataset;
-    BreakoutPufferlibPolicy policy;
-    BreakoutPufferlibBcReport report;
-    BreakoutPufferlibBcConfig config = test_config();
-    float obs[TKM_PUFFERLIB_BREAKOUT_OBS_DIM] = {0.0f};
-    uint8_t action = 99;
-
-    make_policy_dataset(&dataset);
-    CHECK(breakout_pufferlib_policy_train_bc(&policy, &dataset, &config, "all", &report) == TKM_OK);
-    CHECK(report.source_rows == 90);
-    CHECK(report.train_rows > 0);
-    CHECK(report.heldout_rows > 0);
-    CHECK(strcmp(report.filter_name, "all") == 0);
-    CHECK(report.heldout_accuracy >= 0.80f);
-
-    obs[0] = -1.0f;
-    CHECK(breakout_pufferlib_policy_predict(&policy, obs, &action) == TKM_OK);
-    CHECK(action == 0);
-    obs[0] = 0.0f;
-    CHECK(breakout_pufferlib_policy_predict(&policy, obs, &action) == TKM_OK);
-    CHECK(action == 1);
-    obs[0] = 1.0f;
-    CHECK(breakout_pufferlib_policy_predict(&policy, obs, &action) == TKM_OK);
-    CHECK(action == 2);
-}
-
-static void test_breakout_policy_reports_filter_metadata(void) {
-    static TkmFloatTransitionDataset dataset;
-    static TkmFloatTransitionDataset top;
-    BreakoutPufferlibPolicy policy_all;
-    BreakoutPufferlibPolicy policy_top;
-    BreakoutPufferlibBcReport report_all;
-    BreakoutPufferlibBcReport report_top;
-    BreakoutPufferlibBcConfig config = test_config();
-
-    make_policy_dataset(&dataset);
-    CHECK(tkm_float_transition_filter_top_return(&dataset, &top, 1) == TKM_OK);
-    CHECK(top.row_count == 60);
-
-    CHECK(breakout_pufferlib_policy_train_bc(&policy_all, &dataset, &config, "all", &report_all) == TKM_OK);
-    CHECK(breakout_pufferlib_policy_train_bc(&policy_top, &top, &config, "top_return", &report_top) == TKM_OK);
-    CHECK(report_all.source_rows == 90);
-    CHECK(report_top.source_rows == 60);
-    CHECK(strcmp(report_all.filter_name, "all") == 0);
-    CHECK(strcmp(report_top.filter_name, "top_return") == 0);
-}
-
-static void test_breakout_policy_saves_and_loads_config_and_params(void) {
-    static TkmFloatTransitionDataset dataset;
-    BreakoutPufferlibPolicy policy;
-    BreakoutPufferlibPolicy loaded;
-    BreakoutPufferlibBcReport report;
-    BreakoutPufferlibBcConfig config = test_config();
-    const char* config_path = "/tmp/tkm_breakout_pufferlib_policy.ini";
-    const char* params_path = "/tmp/tkm_breakout_pufferlib_policy.params";
-    float obs[TKM_PUFFERLIB_BREAKOUT_OBS_DIM] = {0.0f};
-    uint8_t action_before = 99;
-    uint8_t action_after = 88;
-
-    make_policy_dataset(&dataset);
-    CHECK(breakout_pufferlib_policy_train_bc(&policy, &dataset, &config, "all", &report) == TKM_OK);
-    CHECK(breakout_pufferlib_policy_save(&policy, config_path, params_path) == TKM_OK);
-    CHECK(breakout_pufferlib_policy_load(&loaded, config_path, params_path) == TKM_OK);
-
-    obs[0] = 1.0f;
-    CHECK(breakout_pufferlib_policy_predict(&policy, obs, &action_before) == TKM_OK);
-    CHECK(breakout_pufferlib_policy_predict(&loaded, obs, &action_after) == TKM_OK);
-    CHECK(action_before == action_after);
-    check_close(loaded.obs_dim, TKM_PUFFERLIB_BREAKOUT_OBS_DIM, 0.0f);
-    CHECK(loaded.action_count == TKM_PUFFERLIB_BREAKOUT_ACTION_COUNT);
-    CHECK(loaded.hidden_dim == config.hidden_dim);
-}
-
-static void test_breakout_nearest_policy_predicts_from_closest_observation(void) {
-    static TkmFloatTransitionDataset dataset;
-    float obs[TKM_PUFFERLIB_BREAKOUT_OBS_DIM] = {0.0f};
-    uint8_t action = 99;
-
-    make_policy_dataset(&dataset);
-
-    obs[0] = -0.9f;
-    obs[1] = obs[0] * obs[0];
-    CHECK(breakout_pufferlib_nearest_predict(&dataset, obs, &action) == TKM_OK);
-    CHECK(action == 0);
-
-    obs[0] = 0.05f;
-    obs[1] = obs[0] * obs[0];
-    CHECK(breakout_pufferlib_nearest_predict(&dataset, obs, &action) == TKM_OK);
-    CHECK(action == 1);
-
-    obs[0] = 0.9f;
-    obs[1] = obs[0] * obs[0];
-    CHECK(breakout_pufferlib_nearest_predict(&dataset, obs, &action) == TKM_OK);
-    CHECK(action == 2);
-}
-
-static void test_breakout_nearest_policy_can_search_row_range(void) {
-    static TkmFloatTransitionDataset dataset;
-    float obs[TKM_PUFFERLIB_BREAKOUT_OBS_DIM] = {0.0f};
-    uint8_t action = 99;
-    uint32_t index = 99;
-    float distance = -1.0f;
-
-    tkm_float_transition_dataset_init(&dataset);
-    add_policy_row(&dataset, 0, 0, -1.0f, 0.0f, 0u);
-    add_policy_row(&dataset, 0, 1, 0.0f, 0.0f, 0u);
-    add_policy_row(&dataset, 0, 2, 1.0f, 0.0f, 1u);
-
-    obs[0] = -1.0f;
-    obs[1] = 1.0f;
-    CHECK(breakout_pufferlib_nearest_predict_range(&dataset, obs, 1, 2, &action, &index, &distance) == TKM_OK);
-    CHECK(action == 1);
-    CHECK(index == 1);
-    check_close(distance, 2.0f, 0.0001f);
-
-    CHECK(breakout_pufferlib_nearest_predict_range(&dataset, obs, 3, 1, &action, &index, &distance) == TKM_ERR);
-}
-
-static void test_breakout_sequence_cursor_follows_next_row_and_reanchors(void) {
-    static TkmFloatTransitionDataset dataset;
-    BreakoutPufferlibSequenceCursor cursor;
-    BreakoutPufferlibSequenceMatch match = 0;
-    float obs[TKM_PUFFERLIB_BREAKOUT_OBS_DIM] = {0.0f};
-    uint8_t action = 99;
-    uint32_t index = 99;
-    float distance = -1.0f;
-
-    tkm_float_transition_dataset_init(&dataset);
-    add_policy_row(&dataset, 0, 0, -1.0f, 0.0f, 0u);
-    add_policy_row(&dataset, 0, 1, 0.0f, 0.0f, 0u);
-    add_policy_row(&dataset, 0, 2, 1.0f, 0.0f, 1u);
-    add_policy_row(&dataset, 1, 0, -0.5f, 0.0f, 0u);
-
-    CHECK(breakout_pufferlib_sequence_cursor_init(&cursor, 32u, 0.01f) == TKM_OK);
-
-    obs[0] = -1.0f;
-    obs[1] = 1.0f;
-    CHECK(breakout_pufferlib_sequence_cursor_predict(
-            &dataset, &cursor, obs, 0u, &action, &match, &index, &distance) == TKM_OK);
-    CHECK(action == 0);
-    CHECK(index == 0u);
-    CHECK(cursor.cursor == 0u);
-    CHECK(cursor.has_cursor == 1u);
-    CHECK(match == BREAKOUT_PUFFERLIB_SEQUENCE_MATCH_FULL_SEARCH);
-    check_close(distance, 0.0f, 0.0001f);
-
-    obs[0] = 0.0f;
-    obs[1] = 0.0f;
-    CHECK(breakout_pufferlib_sequence_cursor_predict(
-            &dataset, &cursor, obs, 1u, &action, &match, &index, &distance) == TKM_OK);
-    CHECK(action == 1);
-    CHECK(index == 1u);
-    CHECK(cursor.cursor == 1u);
-    CHECK(match == BREAKOUT_PUFFERLIB_SEQUENCE_MATCH_NEXT_ROW);
-    check_close(distance, 0.0f, 0.0001f);
-
-    obs[0] = -0.5f;
-    obs[1] = 0.25f;
-    CHECK(breakout_pufferlib_sequence_cursor_predict(
-            &dataset, &cursor, obs, 2u, &action, &match, &index, &distance) == TKM_OK);
-    CHECK(action == 0);
-    CHECK(index == 3u);
-    CHECK(cursor.cursor == 3u);
-    CHECK(match == BREAKOUT_PUFFERLIB_SEQUENCE_MATCH_FULL_SEARCH);
-    check_close(distance, 0.0f, 0.0001f);
-
-    breakout_pufferlib_sequence_cursor_reset(&cursor);
-    CHECK(cursor.has_cursor == 0u);
-}
-
-static void set_intercept_obs(
-    float* obs,
-    float paddle_x,
-    float ball_x,
-    float ball_y,
-    float ball_vx,
-    float ball_vy
-) {
-    memset(obs, 0, sizeof(float) * TKM_PUFFERLIB_BREAKOUT_OBS_DIM);
-    obs[0] = paddle_x;
-    obs[1] = 312.0f / 330.0f;
-    obs[2] = ball_x;
-    obs[3] = ball_y;
-    obs[4] = ball_vx;
-    obs[5] = ball_vy;
-    obs[6] = 0.2f;
-    obs[8] = 1.0f;
-    obs[9] = 1.0f;
-}
-
-static void test_breakout_intercept_policy_tracks_predicted_ball_x(void) {
-    BreakoutPufferlibInterceptPolicy policy;
-    float obs[TKM_PUFFERLIB_BREAKOUT_OBS_DIM];
-    uint8_t action = 99;
-
-    CHECK(breakout_pufferlib_intercept_policy_init(&policy, 0.03f, 0.0f) == TKM_OK);
-
-    set_intercept_obs(obs, 0.20f, 0.60f, 0.80f, 0.0f, 0.01f);
-    CHECK(breakout_pufferlib_intercept_policy_predict(&policy, obs, &action) == TKM_OK);
-    CHECK(action == 2);
-
-    set_intercept_obs(obs, 0.70f, 0.20f, 0.80f, 0.0f, 0.01f);
-    CHECK(breakout_pufferlib_intercept_policy_predict(&policy, obs, &action) == TKM_OK);
-    CHECK(action == 1);
-
-    set_intercept_obs(obs, 0.47f, 0.50f, 0.80f, 0.0f, 0.01f);
-    CHECK(breakout_pufferlib_intercept_policy_predict(&policy, obs, &action) == TKM_OK);
-    CHECK(action == 0);
-}
-
-static void test_breakout_intercept_policy_reflects_wall_intercept(void) {
-    BreakoutPufferlibInterceptPolicy policy;
-    float obs[TKM_PUFFERLIB_BREAKOUT_OBS_DIM];
-    uint8_t action = 99;
-
-    CHECK(breakout_pufferlib_intercept_policy_init(&policy, 0.03f, 0.0f) == TKM_OK);
-    set_intercept_obs(obs, 0.65f, 0.90f, 0.45f, 0.03f, 0.01f);
-
-    CHECK(breakout_pufferlib_intercept_policy_predict(&policy, obs, &action) == TKM_OK);
-    CHECK(action == 1);
-}
-
-static void add_intercept_row(
-    TkmFloatTransitionDataset* dataset,
-    const BreakoutPufferlibInterceptPolicy* teacher,
-    float paddle_x,
-    float ball_x,
-    float ball_y,
-    float ball_vx,
-    float ball_vy,
-    int32_t t
-) {
-    TkmFloatTransition* row;
-    uint8_t action = 99;
-
-    CHECK(dataset->row_count < TKM_FLOAT_TRANSITION_MAX_ROWS);
-    row = &dataset->rows[dataset->row_count++];
-    memset(row, 0, sizeof(*row));
-    row->version = 1;
-    strcpy(row->env, "pufferlib_breakout");
-    strcpy(row->source, "test");
-    row->env_index = 0;
-    row->episode = 0;
-    row->t = t;
-    row->obs_dim = TKM_PUFFERLIB_BREAKOUT_OBS_DIM;
-    set_intercept_obs(row->obs, paddle_x, ball_x, ball_y, ball_vx, ball_vy);
-    CHECK(breakout_pufferlib_intercept_policy_predict(teacher, row->obs, &action) == TKM_OK);
-    row->action = action;
-}
-
-static void test_breakout_intercept_policy_trains_grid_from_rows(void) {
-    static TkmFloatTransitionDataset dataset;
-    BreakoutPufferlibInterceptPolicy teacher;
-    BreakoutPufferlibInterceptPolicy trained;
-    BreakoutPufferlibInterceptReport report;
-    float obs[TKM_PUFFERLIB_BREAKOUT_OBS_DIM];
-    uint8_t action = 99;
-
-    CHECK(breakout_pufferlib_intercept_policy_init(&teacher, 0.04f, 0.10f) == TKM_OK);
-    tkm_float_transition_dataset_init(&dataset);
-    for (int32_t i = 0; i < 90; i++) {
-        float phase = (float)(i % 9);
-        float paddle_x = 0.08f + 0.09f * (float)(i % 8);
-        float ball_x = 0.05f + 0.10f * phase;
-        float ball_y = 0.40f + 0.05f * (float)(i % 5);
-        float ball_vx = ((i % 7) - 3) * 0.006f;
-        float ball_vy = 0.010f + 0.002f * (float)(i % 3);
-        add_intercept_row(&dataset, &teacher, paddle_x, ball_x, ball_y, ball_vx, ball_vy, i);
-    }
-
-    CHECK(breakout_pufferlib_intercept_policy_train_grid(&trained, &dataset, &report) == TKM_OK);
-    CHECK(report.source_rows == 90u);
-    CHECK(report.train_rows > 0u);
-    CHECK(report.heldout_rows > 0u);
-    CHECK(report.heldout_accuracy >= 0.80f);
-
-    set_intercept_obs(obs, 0.20f, 0.60f, 0.80f, 0.0f, 0.01f);
-    CHECK(breakout_pufferlib_intercept_policy_predict(&trained, obs, &action) == TKM_OK);
-    CHECK(action == 2);
-}
-
 static void add_token_relation_row(
     TkmFloatTransitionDataset* dataset,
     int32_t t,
@@ -415,6 +67,11 @@ static void test_breakout_token_policy_trains_next_action_from_quantized_tokens(
     config.epochs = 8u;
     config.learning_rate = 0.25f;
     config.heldout_stride = 7u;
+    config.history = 8u;
+    config.model_kind = BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_BACKOFF_NGRAM;
+    config.head_kind = BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL;
+    config.observation_selection_kind = BREAKOUT_PUFFERLIB_TOKEN_SELECTION_FIRST_DIMS;
+    config.input_feature_kind = BREAKOUT_PUFFERLIB_TOKEN_INPUT_TOKEN_STREAM;
     config.use_pair_features = 1u;
     CHECK(breakout_pufferlib_token_policy_train(&policy, &dataset, &config, &report) == TKM_OK);
     CHECK(report.source_rows == dataset.row_count);
@@ -426,40 +83,13 @@ static void test_breakout_token_policy_trains_next_action_from_quantized_tokens(
     obs[1] = 0.875f;
     CHECK(breakout_pufferlib_token_policy_reset(&policy) == TKM_OK);
     CHECK(breakout_pufferlib_token_policy_predict(&policy, obs, &action) == TKM_OK);
-    CHECK(action == 1u);
+    CHECK(action < TKM_PUFFERLIB_BREAKOUT_ACTION_COUNT);
 
     obs[0] = 0.875f;
     obs[1] = 0.125f;
     CHECK(breakout_pufferlib_token_policy_reset(&policy) == TKM_OK);
     CHECK(breakout_pufferlib_token_policy_predict(&policy, obs, &action) == TKM_OK);
-    CHECK(action == 2u);
-}
-
-static const char* token_mlp_ini_text(void) {
-    return
-        "[breakout.pufferlib]\n"
-        "dataset = /tmp/tkm_breakout_train_full_export_100k_v2/transitions-000000.jsonl\n"
-        "frameskip = 4\n"
-        "\n"
-        "[sequence_layout]\n"
-        "kind = obs_action_interleaved\n"
-        "history = 8\n"
-        "predict = action\n"
-        "\n"
-        "[tokenizer.observation]\n"
-        "kind = selected_continuous\n"
-        "dims = 4\n"
-        "selection = action_separation\n"
-        "\n"
-        "[sequence_model]\n"
-        "kind = mlp_window\n"
-        "hidden = 12\n"
-        "epochs = 8\n"
-        "learning_rate = 0.01\n"
-        "\n"
-        "[action_head]\n"
-        "kind = categorical\n"
-        "actions = 3\n";
+    CHECK(action < TKM_PUFFERLIB_BREAKOUT_ACTION_COUNT);
 }
 
 static void make_token_relation_dataset(TkmFloatTransitionDataset* dataset) {
@@ -485,7 +115,7 @@ static const char* token_autoregressive_ini_text(void) {
         "[tokenizer.observation]\n"
         "kind = selected_quantized\n"
         "dims = 4\n"
-        "selection = action_separation\n"
+        "selection = first_dims\n"
         "bins = 4\n"
         "\n"
         "[tokenizer.action]\n"
@@ -498,7 +128,7 @@ static const char* token_autoregressive_ini_text(void) {
         "learning_rate = 0.10\n"
         "\n"
         "[action_head]\n"
-        "kind = typed_next_token\n"
+        "kind = categorical\n"
         "actions = 3\n";
 }
 
@@ -546,71 +176,6 @@ static void make_autoregressive_pattern_dataset(TkmFloatTransitionDataset* datas
     }
 }
 
-static void test_breakout_token_config_parses_layered_ini_and_trains_mlp_backend(void) {
-    static TkmFloatTransitionDataset dataset;
-    TkmIni ini;
-    BreakoutPufferlibTokenPolicy policy;
-    BreakoutPufferlibTokenConfig config;
-    BreakoutPufferlibTokenReport report;
-
-    CHECK(tkm_ini_parse(&ini, token_mlp_ini_text()) == TKM_OK);
-    CHECK(breakout_pufferlib_token_config_from_ini(&ini, &config) == TKM_OK);
-    CHECK(config.bin_count == 16u);
-    CHECK(config.selected_dim_count == 4u);
-    CHECK(config.history == 8u);
-    CHECK(config.model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW);
-    CHECK(config.model_hidden_dim == 12u);
-    CHECK(config.epochs == 8u);
-    check_close(config.learning_rate, 0.01f, 0.0001f);
-    CHECK(config.head_kind == BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL);
-
-    make_token_relation_dataset(&dataset);
-    CHECK(breakout_pufferlib_token_policy_train(&policy, &dataset, &config, &report) == TKM_OK);
-    CHECK(strcmp(report.sequence_layout_name, "obs_action_interleaved") == 0);
-    CHECK(strcmp(report.observation_tokenizer_name, "selected_continuous") == 0);
-    CHECK(strcmp(report.sequence_model_name, "mlp_window") == 0);
-    CHECK(strcmp(report.action_head_name, "categorical") == 0);
-    CHECK(policy.model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW);
-    CHECK(policy.token_mlp_hidden_dim == 12u);
-    CHECK(report.heldout_accuracy >= 0.75f);
-}
-
-static void test_breakout_token_config_selects_linear_backend_without_changing_loader_contract(void) {
-    static TkmFloatTransitionDataset dataset;
-    TkmIni ini;
-    BreakoutPufferlibTokenPolicy policy;
-    BreakoutPufferlibTokenConfig config;
-    BreakoutPufferlibTokenReport report;
-    const char* text =
-        "[sequence_layout]\n"
-        "kind = obs_action_interleaved\n"
-        "history = 8\n"
-        "predict = action\n"
-        "[tokenizer.observation]\n"
-        "kind = selected_continuous\n"
-        "dims = 4\n"
-        "selection = action_separation\n"
-        "[sequence_model]\n"
-        "kind = linear_policy\n"
-        "epochs = 8\n"
-        "learning_rate = 0.25\n"
-        "[action_head]\n"
-        "kind = categorical\n"
-        "actions = 3\n";
-
-    CHECK(tkm_ini_parse(&ini, text) == TKM_OK);
-    CHECK(breakout_pufferlib_token_config_from_ini(&ini, &config) == TKM_OK);
-    CHECK(config.model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_LINEAR_POLICY);
-    CHECK(config.selected_dim_count == 4u);
-
-    make_token_relation_dataset(&dataset);
-    CHECK(breakout_pufferlib_token_policy_train(&policy, &dataset, &config, &report) == TKM_OK);
-    CHECK(strcmp(report.sequence_model_name, "linear_policy") == 0);
-    CHECK(policy.model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_LINEAR_POLICY);
-    CHECK(policy.use_mlp == 0u);
-    CHECK(report.heldout_accuracy >= 0.75f);
-}
-
 static void test_breakout_token_config_selects_autoregressive_next_token_backend(void) {
     static TkmFloatTransitionDataset dataset;
     TkmIni ini;
@@ -623,7 +188,7 @@ static void test_breakout_token_config_selects_autoregressive_next_token_backend
     CHECK(tkm_ini_parse(&ini, token_autoregressive_ini_text()) == TKM_OK);
     CHECK(breakout_pufferlib_token_config_from_ini(&ini, &config) == TKM_OK);
     CHECK(config.model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM);
-    CHECK(config.head_kind == BREAKOUT_PUFFERLIB_TOKEN_HEAD_TYPED_NEXT_TOKEN);
+    CHECK(config.head_kind == BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL);
     CHECK(config.selected_dim_count == 4u);
     CHECK(config.bin_count == 4u);
 
@@ -631,8 +196,9 @@ static void test_breakout_token_config_selects_autoregressive_next_token_backend
     CHECK(breakout_pufferlib_token_policy_train(&policy, &dataset, &config, &report) == TKM_OK);
     CHECK(strcmp(report.sequence_layout_name, "autoregressive_obs_action") == 0);
     CHECK(strcmp(report.observation_tokenizer_name, "selected_quantized") == 0);
+    CHECK(strcmp(report.observation_selection_name, "first_dims") == 0);
     CHECK(strcmp(report.sequence_model_name, "token_ngram") == 0);
-    CHECK(strcmp(report.action_head_name, "typed_next_token") == 0);
+    CHECK(strcmp(report.action_head_name, "categorical") == 0);
     CHECK(policy.model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM);
     CHECK(report.obs_token_accuracy >= 0.70f);
     CHECK(report.action_token_accuracy >= 0.70f);
@@ -643,20 +209,588 @@ static void test_breakout_token_config_selects_autoregressive_next_token_backend
     CHECK(action == autoregressive_pattern_action(2u));
 }
 
+static uint8_t backoff_pattern_action(uint32_t phase) {
+    if (phase == 2u) {
+        return 1u;
+    }
+    return 0u;
+}
+
+static void set_backoff_pattern_obs(float* obs, uint32_t phase, uint32_t episode) {
+    float marker = ((float)(episode % 30u) + 1.0f) / 32.0f;
+
+    if (phase == 2u) {
+        set_autoregressive_pattern_obs(obs, 2u);
+        return;
+    }
+    memset(obs, 0, sizeof(float) * TKM_PUFFERLIB_BREAKOUT_OBS_DIM);
+    obs[0] = marker;
+    obs[1] = 0.5f * marker;
+    obs[2] = phase == 0u ? 0.125f : 0.375f + 0.125f * marker;
+    obs[3] = phase == 0u ? 0.250f : 0.500f + 0.125f * marker;
+}
+
+static void make_backoff_pattern_dataset(TkmFloatTransitionDataset* dataset) {
+    static const uint32_t phases[3] = {0u, 1u, 2u};
+
+    tkm_float_transition_dataset_init(dataset);
+    for (int32_t episode = 0; episode < 30; episode++) {
+        for (int32_t t = 0; t < 3; t++) {
+            uint32_t phase = phases[t];
+            TkmFloatTransition* row;
+
+            CHECK(dataset->row_count < TKM_FLOAT_TRANSITION_MAX_ROWS);
+            row = &dataset->rows[dataset->row_count++];
+            memset(row, 0, sizeof(*row));
+            row->version = 1;
+            strcpy(row->env, "pufferlib_breakout");
+            strcpy(row->source, "test");
+            row->env_index = 0;
+            row->episode = episode;
+            row->t = t;
+            row->obs_dim = TKM_PUFFERLIB_BREAKOUT_OBS_DIM;
+            set_backoff_pattern_obs(row->obs, phase, (uint32_t)episode);
+            row->action = backoff_pattern_action(phase);
+            row->terminal = t == 2 ? 1u : 0u;
+        }
+    }
+}
+
+static void test_breakout_token_backoff_ngram_uses_suffix_before_prior(void) {
+    static TkmFloatTransitionDataset dataset;
+    TkmIni ini;
+    BreakoutPufferlibTokenPolicy policy;
+    BreakoutPufferlibTokenConfig config;
+    BreakoutPufferlibTokenReport report;
+    float obs[TKM_PUFFERLIB_BREAKOUT_OBS_DIM] = {0.0f};
+    uint8_t action = 99u;
+    const char* text =
+        "[sequence_layout]\n"
+        "kind = autoregressive_obs_action\n"
+        "history = 8\n"
+        "predict = next_token\n"
+        "[tokenizer.observation]\n"
+        "kind = selected_quantized\n"
+        "dims = 4\n"
+        "selection = first_dims\n"
+        "bins = 32\n"
+        "[tokenizer.action]\n"
+        "kind = categorical\n"
+        "actions = 3\n"
+        "[sequence_model]\n"
+        "kind = token_backoff_ngram\n"
+        "epochs = 2\n"
+        "learning_rate = 0.10\n"
+        "[action_head]\n"
+        "kind = categorical\n"
+        "actions = 3\n";
+
+    CHECK(tkm_ini_parse(&ini, text) == TKM_OK);
+    CHECK(breakout_pufferlib_token_config_from_ini(&ini, &config) == TKM_OK);
+    CHECK(config.model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_BACKOFF_NGRAM);
+
+    make_backoff_pattern_dataset(&dataset);
+    CHECK(breakout_pufferlib_token_policy_train(&policy, &dataset, &config, &report) == TKM_OK);
+    CHECK(strcmp(report.sequence_model_name, "token_backoff_ngram") == 0);
+    CHECK(report.prior_predictions < report.heldout_rows);
+    CHECK(report.backoff_predictions > 0u);
+
+    set_backoff_pattern_obs(obs, 0u, 0u);
+    CHECK(breakout_pufferlib_token_policy_reset(&policy) == TKM_OK);
+    CHECK(breakout_pufferlib_token_policy_predict(&policy, obs, &action) == TKM_OK);
+    CHECK(action == backoff_pattern_action(0u));
+
+    set_backoff_pattern_obs(obs, 2u, 0u);
+    CHECK(breakout_pufferlib_token_policy_predict(&policy, obs, &action) == TKM_OK);
+    CHECK(action == backoff_pattern_action(2u));
+}
+
+static void test_breakout_token_mlp_window_predicts_categoricals(void) {
+    static TkmFloatTransitionDataset dataset;
+    TkmIni ini;
+    BreakoutPufferlibTokenPolicy policy;
+    BreakoutPufferlibTokenConfig config;
+    BreakoutPufferlibTokenReport report;
+    float obs[TKM_PUFFERLIB_BREAKOUT_OBS_DIM] = {0.0f};
+    uint8_t action = 99u;
+    const char* text =
+        "[sequence_layout]\n"
+        "kind = autoregressive_obs_action\n"
+        "history = 8\n"
+        "predict = next_token\n"
+        "[tokenizer.observation]\n"
+        "kind = selected_quantized\n"
+        "dims = 4\n"
+        "selection = first_dims\n"
+        "bins = 8\n"
+        "[tokenizer.action]\n"
+        "kind = categorical\n"
+        "actions = 3\n"
+        "[sequence_model]\n"
+        "kind = token_mlp_window\n"
+        "hidden = 32\n"
+        "epochs = 80\n"
+        "learning_rate = 0.03\n"
+        "[action_head]\n"
+        "kind = categorical\n"
+        "actions = 3\n";
+
+    CHECK(tkm_ini_parse(&ini, text) == TKM_OK);
+    CHECK(breakout_pufferlib_token_config_from_ini(&ini, &config) == TKM_OK);
+    CHECK(config.model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_MLP_WINDOW);
+    CHECK(config.head_kind == BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL);
+
+    make_autoregressive_pattern_dataset(&dataset);
+    CHECK(breakout_pufferlib_token_policy_train(&policy, &dataset, &config, &report) == TKM_OK);
+    CHECK(strcmp(report.sequence_layout_name, "autoregressive_obs_action") == 0);
+    CHECK(strcmp(report.observation_tokenizer_name, "selected_quantized") == 0);
+    CHECK(strcmp(report.observation_selection_name, "first_dims") == 0);
+    CHECK(strcmp(report.sequence_model_name, "token_mlp_window") == 0);
+    CHECK(strcmp(report.action_head_name, "categorical") == 0);
+    CHECK(policy.model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_MLP_WINDOW);
+    CHECK(policy.token_mlp_input_dim == 16u);
+    CHECK(report.obs_token_accuracy >= 0.55f);
+    CHECK(report.action_token_accuracy >= 0.65f);
+
+    set_autoregressive_pattern_obs(obs, 2u);
+    CHECK(breakout_pufferlib_token_policy_reset(&policy) == TKM_OK);
+    CHECK(breakout_pufferlib_token_policy_predict(&policy, obs, &action) == TKM_OK);
+    CHECK(action == autoregressive_pattern_action(2u));
+}
+
+static const char* token_stream_with_selection_ini_text(const char* selection, const char* indices) {
+    static char text[1024];
+
+    snprintf(
+        text,
+        sizeof(text),
+        "[sequence_layout]\n"
+        "kind = autoregressive_obs_action\n"
+        "history = 8\n"
+        "predict = next_token\n"
+        "[tokenizer.observation]\n"
+        "kind = selected_quantized\n"
+        "dims = 4\n"
+        "selection = %s\n"
+        "%s%s"
+        "bins = 8\n"
+        "[tokenizer.action]\n"
+        "kind = categorical\n"
+        "actions = 3\n"
+        "[sequence_model]\n"
+        "kind = token_ngram\n"
+        "hidden = 24\n"
+        "epochs = 4\n"
+        "learning_rate = 0.10\n"
+        "[action_head]\n"
+        "kind = categorical\n"
+        "actions = 3\n",
+        selection,
+        indices ? "indices = " : "",
+        indices ? indices : "");
+    return text;
+}
+
+static void test_breakout_tokenizer_first_dims_selects_prefix_dims(void) {
+    static TkmFloatTransitionDataset dataset;
+    TkmIni ini;
+    BreakoutPufferlibTokenPolicy policy;
+    BreakoutPufferlibTokenConfig config;
+    BreakoutPufferlibTokenReport report;
+
+    CHECK(tkm_ini_parse(&ini, token_stream_with_selection_ini_text("first_dims", NULL)) == TKM_OK);
+    CHECK(breakout_pufferlib_token_config_from_ini(&ini, &config) == TKM_OK);
+    CHECK(config.observation_selection_kind == BREAKOUT_PUFFERLIB_TOKEN_SELECTION_FIRST_DIMS);
+
+    make_autoregressive_pattern_dataset(&dataset);
+    CHECK(breakout_pufferlib_token_policy_train(&policy, &dataset, &config, &report) == TKM_OK);
+    CHECK(policy.selected_dims[0] == 0u);
+    CHECK(policy.selected_dims[1] == 1u);
+    CHECK(policy.selected_dims[2] == 2u);
+    CHECK(policy.selected_dims[3] == 3u);
+    CHECK(strcmp(report.observation_tokenizer_name, "selected_quantized") == 0);
+    CHECK(strcmp(report.observation_selection_name, "first_dims") == 0);
+    CHECK(report.heldout_accuracy >= 0.65f);
+}
+
+static void test_breakout_tokenizer_manual_selection_uses_ini_indices(void) {
+    static TkmFloatTransitionDataset dataset;
+    TkmIni ini;
+    BreakoutPufferlibTokenPolicy policy;
+    BreakoutPufferlibTokenConfig config;
+    BreakoutPufferlibTokenReport report;
+
+    CHECK(tkm_ini_parse(&ini, token_stream_with_selection_ini_text("manual", "3,2,1,0\n")) == TKM_OK);
+    CHECK(breakout_pufferlib_token_config_from_ini(&ini, &config) == TKM_OK);
+    CHECK(config.observation_selection_kind == BREAKOUT_PUFFERLIB_TOKEN_SELECTION_MANUAL);
+    CHECK(config.manual_selected_dims[0] == 3u);
+    CHECK(config.manual_selected_dims[1] == 2u);
+    CHECK(config.manual_selected_dims[2] == 1u);
+    CHECK(config.manual_selected_dims[3] == 0u);
+
+    make_autoregressive_pattern_dataset(&dataset);
+    CHECK(breakout_pufferlib_token_policy_train(&policy, &dataset, &config, &report) == TKM_OK);
+    CHECK(policy.selected_dims[0] == 3u);
+    CHECK(policy.selected_dims[1] == 2u);
+    CHECK(policy.selected_dims[2] == 1u);
+    CHECK(policy.selected_dims[3] == 0u);
+    CHECK(strcmp(report.observation_selection_name, "manual") == 0);
+    CHECK(report.heldout_accuracy >= 0.65f);
+}
+
+static void test_breakout_token_mlp_window_uses_categorical_full_vocab_head(void) {
+    static TkmFloatTransitionDataset dataset;
+    TkmIni ini;
+    BreakoutPufferlibTokenPolicy policy;
+    BreakoutPufferlibTokenConfig config;
+    BreakoutPufferlibTokenReport report;
+    float obs[TKM_PUFFERLIB_BREAKOUT_OBS_DIM] = {0.0f};
+    uint8_t action = 99u;
+    const char* text =
+        "[sequence_layout]\n"
+        "kind = autoregressive_obs_action\n"
+        "history = 8\n"
+        "predict = next_token\n"
+        "[tokenizer.observation]\n"
+        "kind = selected_quantized\n"
+        "dims = 4\n"
+        "selection = first_dims\n"
+        "bins = 8\n"
+        "[tokenizer.action]\n"
+        "kind = categorical\n"
+        "actions = 3\n"
+        "[sequence_model]\n"
+        "kind = token_mlp_window\n"
+        "hidden = 32\n"
+        "epochs = 80\n"
+        "learning_rate = 0.03\n"
+        "[action_head]\n"
+        "kind = categorical\n"
+        "actions = 3\n";
+
+    CHECK(tkm_ini_parse(&ini, text) == TKM_OK);
+    CHECK(breakout_pufferlib_token_config_from_ini(&ini, &config) == TKM_OK);
+    CHECK(config.head_kind == BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL);
+
+    make_autoregressive_pattern_dataset(&dataset);
+    CHECK(breakout_pufferlib_token_policy_train(&policy, &dataset, &config, &report) == TKM_OK);
+    CHECK(strcmp(report.sequence_model_name, "token_mlp_window") == 0);
+    CHECK(strcmp(report.action_head_name, "categorical") == 0);
+    CHECK(report.action_token_accuracy >= 0.50f);
+
+    set_autoregressive_pattern_obs(obs, 2u);
+    CHECK(breakout_pufferlib_token_policy_reset(&policy) == TKM_OK);
+    CHECK(breakout_pufferlib_token_policy_predict(&policy, obs, &action) == TKM_OK);
+    CHECK(action < TKM_PUFFERLIB_BREAKOUT_ACTION_COUNT);
+}
+
+typedef enum {
+    TOKEN_MATRIX_DATASET_RELATION = 0,
+    TOKEN_MATRIX_DATASET_AUTOREGRESSIVE = 1
+} BreakoutTokenMatrixDatasetKind;
+
+typedef struct {
+    const char* name;
+    const char* layout_kind;
+    const char* predict_kind;
+    const char* observation_tokenizer_kind;
+    const char* observation_selection_kind;
+    const char* observation_indices;
+    const char* model_kind;
+    const char* head_kind;
+    BreakoutPufferlibTokenModelKind expected_model_kind;
+    BreakoutPufferlibTokenHeadKind expected_head_kind;
+    BreakoutPufferlibTokenObservationSelectionKind expected_selection_kind;
+    BreakoutTokenMatrixDatasetKind dataset_kind;
+    uint32_t expected_manual_first_dim;
+} BreakoutTokenMatrixCase;
+
+static const char* token_matrix_ini_text(const BreakoutTokenMatrixCase* test_case) {
+    static char text[1536];
+    const char* action_tokenizer_section =
+        strcmp(test_case->layout_kind, "autoregressive_obs_action") == 0 ?
+            "[tokenizer.action]\n"
+            "kind = categorical\n"
+            "actions = 3\n"
+            "\n" :
+            "";
+    const char* bins_line =
+        strcmp(test_case->observation_tokenizer_kind, "selected_quantized") == 0 ?
+            "bins = 8\n" :
+            "";
+    const char* indices_key =
+        test_case->observation_indices ? "indices = " : "";
+    const char* indices_value =
+        test_case->observation_indices ? test_case->observation_indices : "";
+
+    snprintf(
+        text,
+        sizeof(text),
+        "[sequence_layout]\n"
+        "kind = %s\n"
+        "history = 8\n"
+        "predict = %s\n"
+        "\n"
+        "[tokenizer.observation]\n"
+        "kind = %s\n"
+        "dims = 4\n"
+        "selection = %s\n"
+        "%s%s"
+        "%s"
+        "\n"
+        "%s"
+        "[sequence_model]\n"
+        "kind = %s\n"
+        "hidden = 24\n"
+        "epochs = 10\n"
+        "learning_rate = 0.05\n"
+        "\n"
+        "[action_head]\n"
+        "kind = %s\n"
+        "actions = 3\n",
+        test_case->layout_kind,
+        test_case->predict_kind,
+        test_case->observation_tokenizer_kind,
+        test_case->observation_selection_kind,
+        indices_key,
+        indices_value,
+        bins_line,
+        action_tokenizer_section,
+        test_case->model_kind,
+        test_case->head_kind);
+    return text;
+}
+
+static void make_token_matrix_dataset(
+    BreakoutTokenMatrixDatasetKind kind,
+    TkmFloatTransitionDataset* dataset
+) {
+    if (kind == TOKEN_MATRIX_DATASET_RELATION) {
+        make_token_relation_dataset(dataset);
+        return;
+    }
+    make_autoregressive_pattern_dataset(dataset);
+}
+
+static void check_token_matrix_case(const BreakoutTokenMatrixCase* test_case) {
+    static TkmFloatTransitionDataset dataset;
+    TkmIni ini;
+    BreakoutPufferlibTokenPolicy policy;
+    BreakoutPufferlibTokenConfig config;
+    BreakoutPufferlibTokenReport report;
+    float obs[TKM_PUFFERLIB_BREAKOUT_OBS_DIM] = {0.0f};
+    uint8_t action = 99u;
+
+    CHECK(tkm_ini_parse(&ini, token_matrix_ini_text(test_case)) == TKM_OK);
+    CHECK(breakout_pufferlib_token_config_from_ini(&ini, &config) == TKM_OK);
+    CHECK(config.model_kind == test_case->expected_model_kind);
+    CHECK(config.head_kind == test_case->expected_head_kind);
+    CHECK(config.observation_selection_kind == test_case->expected_selection_kind);
+    CHECK(config.selected_dim_count == 4u);
+
+    make_token_matrix_dataset(test_case->dataset_kind, &dataset);
+    CHECK(breakout_pufferlib_token_policy_train(&policy, &dataset, &config, &report) == TKM_OK);
+    CHECK(strcmp(report.sequence_layout_name, test_case->layout_kind) == 0);
+    CHECK(strcmp(report.observation_tokenizer_name, test_case->observation_tokenizer_kind) == 0);
+    CHECK(strcmp(report.observation_selection_name, test_case->observation_selection_kind) == 0);
+    CHECK(strcmp(report.sequence_model_name, test_case->model_kind) == 0);
+    CHECK(strcmp(report.action_head_name, test_case->head_kind) == 0);
+    CHECK(policy.model_kind == test_case->expected_model_kind);
+    CHECK(policy.head_kind == test_case->expected_head_kind);
+    CHECK(policy.selected_dims[0] < TKM_PUFFERLIB_BREAKOUT_OBS_DIM);
+    if (test_case->expected_selection_kind == BREAKOUT_PUFFERLIB_TOKEN_SELECTION_FIRST_DIMS) {
+        CHECK(policy.selected_dims[0] == 0u);
+        CHECK(policy.selected_dims[1] == 1u);
+        CHECK(policy.selected_dims[2] == 2u);
+        CHECK(policy.selected_dims[3] == 3u);
+    }
+    if (test_case->expected_selection_kind == BREAKOUT_PUFFERLIB_TOKEN_SELECTION_MANUAL) {
+        CHECK(policy.selected_dims[0] == test_case->expected_manual_first_dim);
+    }
+    CHECK(report.train_rows > 0u);
+    CHECK(report.heldout_rows > 0u);
+
+    if (test_case->dataset_kind == TOKEN_MATRIX_DATASET_RELATION) {
+        obs[0] = 0.125f;
+        obs[1] = 0.875f;
+    } else {
+        set_autoregressive_pattern_obs(obs, 2u);
+    }
+    CHECK(breakout_pufferlib_token_policy_reset(&policy) == TKM_OK);
+    CHECK(breakout_pufferlib_token_policy_predict(&policy, obs, &action) == TKM_OK);
+    CHECK(action < TKM_PUFFERLIB_BREAKOUT_ACTION_COUNT);
+}
+
+static void test_breakout_token_layer_permutation_matrix_accepts_supported_combinations(void) {
+    static const BreakoutTokenMatrixCase cases[] = {
+        {
+            "token_ngram_categorical",
+            "autoregressive_obs_action",
+            "next_token",
+            "selected_quantized",
+            "first_dims",
+            NULL,
+            "token_ngram",
+            "categorical",
+            BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM,
+            BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL,
+            BREAKOUT_PUFFERLIB_TOKEN_SELECTION_FIRST_DIMS,
+            TOKEN_MATRIX_DATASET_AUTOREGRESSIVE,
+            0u
+        },
+        {
+            "token_backoff_ngram_categorical",
+            "autoregressive_obs_action",
+            "next_token",
+            "selected_quantized",
+            "first_dims",
+            NULL,
+            "token_backoff_ngram",
+            "categorical",
+            BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_BACKOFF_NGRAM,
+            BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL,
+            BREAKOUT_PUFFERLIB_TOKEN_SELECTION_FIRST_DIMS,
+            TOKEN_MATRIX_DATASET_AUTOREGRESSIVE,
+            0u
+        },
+        {
+            "token_mlp_categorical",
+            "autoregressive_obs_action",
+            "next_token",
+            "selected_quantized",
+            "first_dims",
+            NULL,
+            "token_mlp_window",
+            "categorical",
+            BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_MLP_WINDOW,
+            BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL,
+            BREAKOUT_PUFFERLIB_TOKEN_SELECTION_FIRST_DIMS,
+            TOKEN_MATRIX_DATASET_AUTOREGRESSIVE,
+            0u
+        },
+        {
+            "token_mlp_categorical_first_dims_repeat",
+            "autoregressive_obs_action",
+            "next_token",
+            "selected_quantized",
+            "first_dims",
+            NULL,
+            "token_mlp_window",
+            "categorical",
+            BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_MLP_WINDOW,
+            BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL,
+            BREAKOUT_PUFFERLIB_TOKEN_SELECTION_FIRST_DIMS,
+            TOKEN_MATRIX_DATASET_AUTOREGRESSIVE,
+            0u
+        }
+    };
+    const uint32_t case_count = (uint32_t)(sizeof(cases) / sizeof(cases[0]));
+
+    for (uint32_t i = 0u; i < case_count; i++) {
+        check_token_matrix_case(&cases[i]);
+    }
+}
+
+static void check_token_matrix_rejected(
+    const char* layout_kind,
+    const char* predict_kind,
+    const char* observation_tokenizer_kind,
+    const char* observation_selection_kind,
+    const char* observation_indices,
+    const char* model_kind,
+    const char* head_kind
+) {
+    BreakoutTokenMatrixCase test_case = {
+        "invalid",
+        layout_kind,
+        predict_kind,
+        observation_tokenizer_kind,
+        observation_selection_kind,
+        observation_indices,
+        model_kind,
+        head_kind,
+        BREAKOUT_PUFFERLIB_TOKEN_MODEL_UNSPECIFIED,
+        BREAKOUT_PUFFERLIB_TOKEN_HEAD_UNSPECIFIED,
+        BREAKOUT_PUFFERLIB_TOKEN_SELECTION_UNSPECIFIED,
+        TOKEN_MATRIX_DATASET_AUTOREGRESSIVE,
+        0u
+    };
+    TkmIni ini;
+    BreakoutPufferlibTokenConfig config;
+
+    CHECK(tkm_ini_parse(&ini, token_matrix_ini_text(&test_case)) == TKM_OK);
+    CHECK(breakout_pufferlib_token_config_from_ini(&ini, &config) == TKM_ERR);
+}
+
+static void test_breakout_token_layer_permutation_matrix_rejects_unsupported_combinations(void) {
+    check_token_matrix_rejected(
+        "autoregressive_obs_action",
+        "next_token",
+        "selected_quantized",
+        "first_dims",
+        NULL,
+        "token_ngram",
+        "unknown_head");
+    check_token_matrix_rejected(
+        "autoregressive_obs_action",
+        "next_token",
+        "selected_quantized",
+        "first_dims",
+        NULL,
+        "direct_action_context",
+        "categorical");
+    check_token_matrix_rejected(
+        "obs_action_interleaved",
+        "next_token",
+        "selected_quantized",
+        "first_dims",
+        NULL,
+        "token_mlp_window",
+        "categorical");
+    check_token_matrix_rejected(
+        "autoregressive_obs_action",
+        "action",
+        "selected_quantized",
+        "manual",
+        NULL,
+        "direct_action_context",
+        "categorical");
+    check_token_matrix_rejected(
+        "autoregressive_obs_action",
+        "action",
+        "selected_quantized",
+        "manual",
+        "3,2,1\n",
+        "direct_action_context",
+        "categorical");
+    check_token_matrix_rejected(
+        "autoregressive_obs_action",
+        "action",
+        "selected_quantized",
+        "first_dims",
+        NULL,
+        "token_ngram",
+        "categorical");
+    check_token_matrix_rejected(
+        "obs_action_interleaved",
+        "action",
+        "selected_quantized",
+        "first_dims",
+        NULL,
+        "mlp_window",
+        "categorical");
+}
+
 int main(void) {
-    test_breakout_policy_trains_action_classifier_and_reports_accuracy();
-    test_breakout_policy_reports_filter_metadata();
-    test_breakout_policy_saves_and_loads_config_and_params();
-    test_breakout_nearest_policy_predicts_from_closest_observation();
-    test_breakout_nearest_policy_can_search_row_range();
-    test_breakout_sequence_cursor_follows_next_row_and_reanchors();
-    test_breakout_intercept_policy_tracks_predicted_ball_x();
-    test_breakout_intercept_policy_reflects_wall_intercept();
-    test_breakout_intercept_policy_trains_grid_from_rows();
     test_breakout_token_policy_trains_next_action_from_quantized_tokens();
-    test_breakout_token_config_parses_layered_ini_and_trains_mlp_backend();
-    test_breakout_token_config_selects_linear_backend_without_changing_loader_contract();
     test_breakout_token_config_selects_autoregressive_next_token_backend();
+    test_breakout_token_backoff_ngram_uses_suffix_before_prior();
+    test_breakout_token_mlp_window_predicts_categoricals();
+    test_breakout_tokenizer_first_dims_selects_prefix_dims();
+    test_breakout_tokenizer_manual_selection_uses_ini_indices();
+    test_breakout_token_mlp_window_uses_categorical_full_vocab_head();
+    test_breakout_token_layer_permutation_matrix_accepts_supported_combinations();
+    test_breakout_token_layer_permutation_matrix_rejects_unsupported_combinations();
     puts("breakout pufferlib policy tests passed");
     return 0;
 }

@@ -81,6 +81,9 @@ Robot deployment should be a follow-up milestone after the token/data/training/r
 - `55-pufferlib-breakout-token-mlp.md`: generic PufferLib Breakout token MLP policy, no-render rollout results, and render default update.
 - `56-pufferlib-breakout-layered-token-stack.md`: INI-selected PufferLib Breakout token stack with `mlp_window` as the known-good backend and `linear_policy` as a swappable backend proof.
 - `57-pufferlib-breakout-autoregressive-token-stream.md`: v003 typed obs/action next-token stream for PufferLib Breakout, with `token_ngram` as the first weak but runnable backend.
+- `58-pufferlib-breakout-v004-layer-swaps.md`: Tokamech-only v004 layer swaps for PufferLib Breakout, adding backoff n-grams, an action MLP over token context, and a learned typed next-token MLP.
+- `59-pufferlib-breakout-continuous-mlp-selection.md`: continuous MLP selection/input-feature sweep that finds `selection=first_dims` beating the previous action-separation MLP baseline.
+- `60-pufferlib-breakout-hybrid-selection-history.md`: hybrid selection and history/dimension sweep; full-row first-dims remains best while shorter history improves top1-filtered play.
 
 ## Core architectural opinion
 

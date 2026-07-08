@@ -11,13 +11,14 @@ actions: left, stay, right
 goal: drive offset to zero
 ```
 
-The oracle policy is intentionally obvious:
+Current data collection uses a deterministic exploration action stream:
 
 ```text
-offset < 0 -> right
-offset > 0 -> left
-offset == 0 -> stay
+right, stay, left, right, left, stay, ...
 ```
+
+The collector does not inspect the offset to choose the best action. Reward and termination
+still come from the environment dynamics.
 
 This project exists to prove the CPU-only end-to-end stack before adding line-follower physics or CUDA.
 

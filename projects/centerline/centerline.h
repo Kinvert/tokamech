@@ -29,9 +29,9 @@ typedef struct {
 
 void centerline_env_init(CenterlineEnv* env, int16_t start_offset, int16_t limit, uint32_t horizon);
 int centerline_observe_i16(void* env, int16_t* obs);
-uint8_t centerline_oracle_action(int16_t offset);
+uint8_t centerline_exploration_action(uint32_t step);
 int centerline_action_to_command(uint8_t action, int8_t* command);
 int centerline_step_command(void* env, int8_t command, float* reward, uint8_t* terminal);
-int centerline_collect_oracle(const CenterlineConfig* cfg, TkmTrajectory* trajectory);
+int centerline_collect_exploration(const CenterlineConfig* cfg, TkmTrajectory* trajectory);
 
 #endif

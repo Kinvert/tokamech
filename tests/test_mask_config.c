@@ -13,37 +13,35 @@
 static void test_mask_config_reads_strategy_from_ini(void) {
     const char* text =
         "[mask]\n"
-        "strategy = survival\n";
+        "strategy = none\n";
     TkmIni ini;
     TkmMaskConfig config;
 
     CHECK(tkm_ini_parse(&ini, text) == TKM_OK);
     CHECK(tkm_mask_config_from_ini(&ini, &config) == TKM_OK);
-    CHECK(config.strategy == TKM_MASK_STRATEGY_SURVIVAL);
+    CHECK(config.strategy == TKM_MASK_STRATEGY_NONE);
 }
 
-static void test_mask_config_uses_immediate_default(void) {
+static void test_mask_config_uses_none_default(void) {
     TkmIni ini;
     TkmMaskConfig config;
 
     CHECK(tkm_ini_parse(&ini, "") == TKM_OK);
     CHECK(tkm_mask_config_from_ini(&ini, &config) == TKM_OK);
-    CHECK(config.strategy == TKM_MASK_STRATEGY_IMMEDIATE);
+    CHECK(config.strategy == TKM_MASK_STRATEGY_NONE);
 }
 
-static void test_mask_strategy_parser_accepts_interchangeable_options(void) {
+static void test_mask_strategy_parser_accepts_none_only(void) {
     TkmMaskStrategyKind strategy;
     TkmIni ini;
     TkmMaskConfig config;
 
-    CHECK(tkm_mask_strategy_kind_from_string("immediate", &strategy) == TKM_OK);
-    CHECK(strategy == TKM_MASK_STRATEGY_IMMEDIATE);
-    CHECK(tkm_mask_strategy_kind_from_string("survival", &strategy) == TKM_OK);
-    CHECK(strategy == TKM_MASK_STRATEGY_SURVIVAL);
+    CHECK(tkm_mask_strategy_kind_from_string("none", &strategy) == TKM_OK);
+    CHECK(strategy == TKM_MASK_STRATEGY_NONE);
 
     CHECK(tkm_mask_strategy_kind_from_string(0, &strategy) == TKM_ERR);
     CHECK(tkm_mask_strategy_kind_from_string("unknown", &strategy) == TKM_ERR);
-    CHECK(tkm_mask_strategy_kind_from_string("survival", 0) == TKM_ERR);
+    CHECK(tkm_mask_strategy_kind_from_string("none", 0) == TKM_ERR);
 
     CHECK(tkm_ini_parse(&ini, "[mask]\nstrategy = unknown\n") == TKM_OK);
     CHECK(tkm_mask_config_from_ini(&ini, &config) == TKM_ERR);
@@ -53,8 +51,8 @@ static void test_mask_strategy_parser_accepts_interchangeable_options(void) {
 
 int main(void) {
     test_mask_config_reads_strategy_from_ini();
-    test_mask_config_uses_immediate_default();
-    test_mask_strategy_parser_accepts_interchangeable_options();
+    test_mask_config_uses_none_default();
+    test_mask_strategy_parser_accepts_none_only();
     puts("mask config tests passed");
     return 0;
 }

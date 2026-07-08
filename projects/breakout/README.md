@@ -17,7 +17,7 @@ The original standalone proof uses Tokamech's local token path:
 ```text
 flat Breakout observations
 -> compact relative ball/paddle token
--> oracle token trajectories
+-> deterministic exploration token trajectories
 -> lookup/count policy
 -> closed-loop runtime
 ```
@@ -26,27 +26,41 @@ The current PufferLib bridge uses literal PufferLib Breakout JSONL as the source
 
 ```text
 PufferLib Breakout JSONL
--> selected continuous observation tokens
--> obs/action history
--> config-selected sequence model
--> categorical action token
+-> selected quantized observation tokens
+-> autoregressive obs/action token stream
+-> config-selected next-token sequence model
+-> categorical full-vocabulary next-token head
 -> PufferLib Breakout c_step
 ```
 
-Config-selected token stacks:
+Config-selected next-token stacks:
 
 ```text
-projects/breakout/pufferlib_token_mlp.ini
-projects/breakout/pufferlib_token_linear.ini
 projects/breakout/pufferlib_token_ngram.ini
+projects/breakout/pufferlib_token_backoff_ngram.ini
+projects/breakout/pufferlib_token_mlp_window.ini
+projects/breakout/pufferlib_token_mlp_window_unmasked.ini
+```
+
+PufferLib-side requirements for this bridge are documented in:
+
+```text
+projects/breakout/PUFFERLIB_INTEGRATION.md
 ```
 
 Headless PufferLib benchmark:
 
 ```sh
 make build/pufferlib_breakout_benchmark
-TKM_PUFFERLIB_BREAKOUT_CONFIG=projects/breakout/pufferlib_token_mlp.ini \
+TKM_PUFFERLIB_BREAKOUT_CONFIG=projects/breakout/pufferlib_token_ngram.ini \
 ./build/pufferlib_breakout_benchmark
+```
+
+Run the no-render config matrix against a JSONL dataset:
+
+```sh
+make pufferlib-breakout-matrix-smoke \
+  TKM_PUFFERLIB_BREAKOUT_JSONL=/tmp/tkm_breakout_train_full_export_100k_v2/transitions-000000.jsonl
 ```
 
 Run headless tests:

@@ -18,14 +18,16 @@ int centerline_observe_i16(void* env_ptr, int16_t* obs) {
     return TKM_OK;
 }
 
-uint8_t centerline_oracle_action(int16_t offset) {
-    if (offset < 0) {
-        return CENTERLINE_ACTION_RIGHT;
-    }
-    if (offset > 0) {
-        return CENTERLINE_ACTION_LEFT;
-    }
-    return CENTERLINE_ACTION_STAY;
+uint8_t centerline_exploration_action(uint32_t step) {
+    const uint8_t pattern[] = {
+        CENTERLINE_ACTION_RIGHT,
+        CENTERLINE_ACTION_STAY,
+        CENTERLINE_ACTION_LEFT,
+        CENTERLINE_ACTION_RIGHT,
+        CENTERLINE_ACTION_LEFT,
+        CENTERLINE_ACTION_STAY,
+    };
+    return pattern[step % (sizeof(pattern) / sizeof(pattern[0]))];
 }
 
 int centerline_action_to_command(uint8_t action, int8_t* command) {
@@ -68,7 +70,7 @@ int centerline_step_command(void* env_ptr, int8_t command, float* reward, uint8_
     return TKM_OK;
 }
 
-int centerline_collect_oracle(const CenterlineConfig* cfg, TkmTrajectory* trajectory) {
+int centerline_collect_exploration(const CenterlineConfig* cfg, TkmTrajectory* trajectory) {
     CenterlineEnv env;
     centerline_env_init(&env, cfg->start_offset, cfg->limit, cfg->horizon);
 
@@ -83,7 +85,8 @@ int centerline_collect_oracle(const CenterlineConfig* cfg, TkmTrajectory* trajec
             return TKM_ERR;
         }
 
-        action = centerline_oracle_action(obs);
+        (void)obs;
+        action = centerline_exploration_action(i);
         if (centerline_action_to_command(action, &command) != TKM_OK) {
             return TKM_ERR;
         }

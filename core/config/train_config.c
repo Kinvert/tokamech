@@ -87,10 +87,6 @@ int tkm_train_loss_kind_from_string(const char* text, TkmTrainLossKind* out) {
         *out = TKM_TRAIN_LOSS_CROSS_ENTROPY;
         return TKM_OK;
     }
-    if (tkm_train_config_match(text, "masked_cross_entropy")) {
-        *out = TKM_TRAIN_LOSS_MASKED_CROSS_ENTROPY;
-        return TKM_OK;
-    }
     if (tkm_train_config_match(text, "mse")) {
         *out = TKM_TRAIN_LOSS_MSE;
         return TKM_OK;

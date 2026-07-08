@@ -23,6 +23,13 @@ int tkm_lookup_policy_train(
     const TkmTrajectory* trajectory,
     uint8_t num_actions
 );
+int tkm_lookup_policy_train_return_weighted(
+    TkmLookupPolicy* policy,
+    const TkmIntBins* tokenizer,
+    const TkmTrajectory* trajectory,
+    uint8_t num_actions,
+    float discount
+);
 
 uint8_t tkm_lookup_policy_predict(const TkmLookupPolicy* policy, uint16_t token);
 

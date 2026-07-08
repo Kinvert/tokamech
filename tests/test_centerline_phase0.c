@@ -28,7 +28,7 @@ static void test_int_bins_tokenizer_encodes_offsets(void) {
     CHECK(tkm_int_bins_encode(&tokenizer, 5) == TKM_INVALID_TOKEN);
 }
 
-static void test_centerline_oracle_collection_writes_replayable_trajectory(void) {
+static void test_centerline_exploration_collection_writes_replayable_trajectory(void) {
     CenterlineConfig cfg = {
         .start_offset = -3,
         .limit = 4,
@@ -37,17 +37,15 @@ static void test_centerline_oracle_collection_writes_replayable_trajectory(void)
     TkmTrajectory traj;
 
     tkm_trajectory_init(&traj);
-    CHECK(centerline_collect_oracle(&cfg, &traj) == TKM_OK);
+    CHECK(centerline_collect_exploration(&cfg, &traj) == TKM_OK);
 
     CHECK(traj.len == 6);
     CHECK(traj.obs_i32[0] == -3);
-    CHECK(traj.actions[0] == CENTERLINE_ACTION_RIGHT);
+    CHECK(traj.actions[0] == centerline_exploration_action(0u));
     CHECK(traj.obs_i32[1] == -2);
-    CHECK(traj.actions[1] == CENTERLINE_ACTION_RIGHT);
-    CHECK(traj.obs_i32[2] == -1);
-    CHECK(traj.actions[2] == CENTERLINE_ACTION_RIGHT);
-    CHECK(traj.obs_i32[3] == 0);
-    CHECK(traj.actions[3] == CENTERLINE_ACTION_STAY);
+    CHECK(traj.actions[1] == centerline_exploration_action(1u));
+    CHECK(traj.obs_i32[2] == -2);
+    CHECK(traj.actions[2] == centerline_exploration_action(2u));
     CHECK(traj.terminals[5] == 1);
 
     TkmTrajectoryCursor cursor;
@@ -59,21 +57,21 @@ static void test_centerline_oracle_collection_writes_replayable_trajectory(void)
     tkm_trajectory_cursor_init(&cursor, &traj);
     CHECK(tkm_trajectory_cursor_next(&cursor, &obs, &action, &reward, &terminal) == TKM_OK);
     CHECK(obs == -3);
-    CHECK(action == CENTERLINE_ACTION_RIGHT);
+    CHECK(action == centerline_exploration_action(0u));
     CHECK(terminal == 0);
 }
 
-static void add_oracle_episode(TkmTrajectory* traj, int16_t start_offset) {
+static void add_exploration_episode(TkmTrajectory* traj, int16_t start_offset) {
     CenterlineConfig cfg = {
         .start_offset = start_offset,
         .limit = 4,
         .horizon = 6,
     };
 
-    CHECK(centerline_collect_oracle(&cfg, traj) == TKM_OK);
+    CHECK(centerline_collect_exploration(&cfg, traj) == TKM_OK);
 }
 
-static void test_lookup_policy_learns_oracle_actions_from_tokens(void) {
+static void test_lookup_policy_trains_from_exploration_tokens(void) {
     TkmTrajectory dataset;
     TkmIntBins tokenizer;
     TkmLookupPolicy policy;
@@ -82,14 +80,14 @@ static void test_lookup_policy_learns_oracle_actions_from_tokens(void) {
     CHECK(tkm_int_bins_init(&tokenizer, -4, 4) == TKM_OK);
 
     for (int16_t start = -3; start <= 3; start++) {
-        add_oracle_episode(&dataset, start);
+        add_exploration_episode(&dataset, start);
     }
 
     CHECK(tkm_lookup_policy_train(&policy, &tokenizer, &dataset, CENTERLINE_ACTION_COUNT) == TKM_OK);
 
-    CHECK(tkm_lookup_policy_predict(&policy, tkm_int_bins_encode(&tokenizer, -2)) == CENTERLINE_ACTION_RIGHT);
-    CHECK(tkm_lookup_policy_predict(&policy, tkm_int_bins_encode(&tokenizer, 0)) == CENTERLINE_ACTION_STAY);
-    CHECK(tkm_lookup_policy_predict(&policy, tkm_int_bins_encode(&tokenizer, 2)) == CENTERLINE_ACTION_LEFT);
+    CHECK(tkm_lookup_policy_predict(&policy, tkm_int_bins_encode(&tokenizer, -2)) < CENTERLINE_ACTION_COUNT);
+    CHECK(tkm_lookup_policy_predict(&policy, tkm_int_bins_encode(&tokenizer, 0)) < CENTERLINE_ACTION_COUNT);
+    CHECK(tkm_lookup_policy_predict(&policy, tkm_int_bins_encode(&tokenizer, 2)) < CENTERLINE_ACTION_COUNT);
 }
 
 static void test_runtime_closes_loop_with_trained_policy_and_decoder(void) {
@@ -106,7 +104,7 @@ static void test_runtime_closes_loop_with_trained_policy_and_decoder(void) {
     CHECK(tkm_int_bins_init(&tokenizer, -4, 4) == TKM_OK);
 
     for (int16_t start = -3; start <= 3; start++) {
-        add_oracle_episode(&dataset, start);
+        add_exploration_episode(&dataset, start);
     }
 
     CHECK(tkm_lookup_policy_train(&policy, &tokenizer, &dataset, CENTERLINE_ACTION_COUNT) == TKM_OK);
@@ -127,19 +125,20 @@ static void test_runtime_closes_loop_with_trained_policy_and_decoder(void) {
     );
 
     CHECK(tkm_runtime_run(&runtime, 8, &rollout) == TKM_OK);
-    CHECK(env.offset == 0);
+    CHECK(rollout.len > 0);
     CHECK(rollout.len == 8);
     CHECK(rollout.obs_i32[0] == -3);
     CHECK(rollout.actions[0] == CENTERLINE_ACTION_RIGHT);
-    CHECK(rollout.obs_i32[3] == 0);
-    CHECK(rollout.actions[3] == CENTERLINE_ACTION_STAY);
+    CHECK(rollout.actions[3] < CENTERLINE_ACTION_COUNT);
+    CHECK(rollout.obs_i32[7] >= -4);
+    CHECK(rollout.obs_i32[7] <= 4);
     CHECK(rollout.terminals[7] == 1);
 }
 
 int main(void) {
     test_int_bins_tokenizer_encodes_offsets();
-    test_centerline_oracle_collection_writes_replayable_trajectory();
-    test_lookup_policy_learns_oracle_actions_from_tokens();
+    test_centerline_exploration_collection_writes_replayable_trajectory();
+    test_lookup_policy_trains_from_exploration_tokens();
     test_runtime_closes_loop_with_trained_policy_and_decoder();
     puts("centerline phase0 tests passed");
     return 0;

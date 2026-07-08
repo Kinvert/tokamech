@@ -88,10 +88,9 @@ int breakout_step_env(BreakoutEnv* env, uint8_t action, float* reward, uint8_t* 
 
 uint16_t breakout_make_policy_token(int relative_bucket);
 uint16_t breakout_tokenize_observation(const float* observations);
-uint8_t breakout_oracle_action_from_token(uint16_t token);
-uint8_t breakout_oracle_action(const BreakoutEnv* env);
+uint8_t breakout_exploration_action(uint32_t step);
 int breakout_policy_tokenizer_init(TkmIntBins* tokenizer);
-int breakout_collect_oracle_tokens(TkmTrajectory* trajectory);
+int breakout_collect_exploration_tokens(TkmTrajectory* trajectory);
 int breakout_run_token_policy(
     BreakoutEnv* env,
     const TkmLookupPolicy* policy,

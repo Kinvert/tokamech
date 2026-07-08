@@ -56,7 +56,7 @@ static const char* policy_name(uint8_t policy_mode) {
         return "config";
     }
     if (policy_mode == 1u) {
-        return "planner";
+        return "explore";
     }
     return "lookup";
 }
@@ -107,9 +107,9 @@ int main(void) {
     uint8_t policy_mode = 0;
     int frame = 0;
 
-    fail_if(tkm_run_config_from_file("projects/snake/action_scorer.ini", &run_config), "tkm_run_config_from_file");
+    fail_if(tkm_run_config_from_file("projects/snake/token_policy.ini", &run_config), "tkm_run_config_from_file");
     tkm_trajectory_init(&dataset);
-    fail_if(snake_collect_oracle_tokens(&dataset), "snake_collect_oracle_tokens");
+    fail_if(snake_collect_exploration_tokens(&dataset, 64), "snake_collect_exploration_tokens");
     fail_if(snake_policy_tokenizer_init(&tokenizer), "snake_policy_tokenizer_init");
     fail_if(tkm_lookup_policy_train(&policy, &tokenizer, &dataset, SNAKE_ACTION_COUNT), "tkm_lookup_policy_train");
 
@@ -135,9 +135,9 @@ int main(void) {
             if (human_control) {
                 last_action = human_action(last_action);
             } else if (policy_mode == 0u) {
-                last_action = snake_decode_action(&env, &run_config.decoder, snake_planner_action(&env));
+                last_action = snake_decode_action(&env, &run_config.decoder, last_action);
             } else if (policy_mode == 1u) {
-                last_action = snake_planner_action(&env);
+                last_action = snake_exploration_action((uint32_t)(frame / 10));
             } else {
                 uint16_t token = snake_tokenize_observation(&env);
                 last_action = tkm_lookup_policy_predict(&policy, token);

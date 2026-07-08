@@ -18,30 +18,18 @@
 #define DEFAULT_MAX_STEPS 24000u
 #define DEFAULT_WINDOW_RADIUS 2048u
 #define DEFAULT_REANCHOR_INTERVAL 32u
-#define DEFAULT_TOKEN_CONFIG_PATH "projects/breakout/pufferlib_token_mlp.ini"
+#define DEFAULT_TOKEN_CONFIG_PATH "projects/breakout/pufferlib_token_ngram.ini"
 
 static uint32_t g_configured_frameskip = 1u;
 
 typedef enum {
-    BENCH_METHOD_MLP = 0,
-    BENCH_METHOD_NEAREST_WINDOW = 1,
-    BENCH_METHOD_SEQUENCE_CURSOR = 2,
-    BENCH_METHOD_INTERCEPT = 3,
-    BENCH_METHOD_TOKEN = 4
+    BENCH_METHOD_TOKEN = 0
 } BenchMethod;
 
 typedef struct {
     BenchMethod method;
     const TkmFloatTransitionDataset* dataset;
-    const BreakoutPufferlibPolicy* policy;
     BreakoutPufferlibTokenPolicy* token_policy;
-    uint32_t cursor;
-    uint8_t has_cursor;
-    uint32_t window_radius;
-    uint32_t reanchor_interval;
-    float max_sequence_distance;
-    BreakoutPufferlibSequenceCursor sequence_cursor;
-    BreakoutPufferlibInterceptPolicy intercept_policy;
 } BenchPolicy;
 
 typedef struct {
@@ -119,11 +107,20 @@ static int load_token_config(
 }
 
 static const char* token_result_name(const BreakoutPufferlibTokenReport* report, uint8_t top1) {
+    if (report && strcmp(report->sequence_model_name, "token_backoff_ngram") == 0) {
+        return top1 ? "token_backoff_ngram_top1" : "token_backoff_ngram_all";
+    }
+    if (report && strcmp(report->sequence_model_name, "token_mlp_window") == 0) {
+        return top1 ? "token_mlp_window_top1" : "token_mlp_window_all";
+    }
     if (report && strcmp(report->sequence_model_name, "token_ngram") == 0) {
         return top1 ? "token_ngram_top1" : "token_ngram_all";
     }
-    if (report && strcmp(report->sequence_model_name, "linear_policy") == 0) {
-        return top1 ? "token_linear_policy_top1" : "token_linear_policy_all";
+    if (report && strcmp(report->observation_selection_name, "first_dims") == 0) {
+        return top1 ? "token_mlp_first_dims_top1" : "token_mlp_first_dims_all";
+    }
+    if (report && strcmp(report->observation_selection_name, "manual") == 0) {
+        return top1 ? "token_mlp_manual_top1" : "token_mlp_manual_all";
     }
     return top1 ? "token_mlp_top1" : "token_mlp_all";
 }
@@ -154,104 +151,6 @@ static Breakout make_eval_env(uint32_t seed) {
     return env;
 }
 
-static int train_mlp(
-    const TkmFloatTransitionDataset* dataset,
-    uint32_t hidden_dim,
-    uint32_t epochs,
-    float learning_rate,
-    BreakoutPufferlibPolicy* policy,
-    BreakoutPufferlibBcReport* report
-) {
-    BreakoutPufferlibBcConfig config;
-
-    if (!dataset || !policy || !report) {
-        return TKM_ERR;
-    }
-    config.hidden_dim = hidden_dim;
-    config.epochs = epochs;
-    config.learning_rate = learning_rate;
-    config.heldout_stride = 5u;
-    return breakout_pufferlib_policy_train_bc(policy, dataset, &config, "benchmark", report);
-}
-
-static int nearest_window_action(
-    BenchPolicy* policy,
-    const float* obs,
-    uint32_t step,
-    uint8_t* out_action,
-    BenchResult* result
-) {
-    const TkmFloatTransitionDataset* dataset;
-    uint32_t next_cursor;
-    uint32_t start = 0;
-    uint32_t count = 0;
-    uint32_t found_index = 0;
-    float distance = 0.0f;
-    uint8_t use_full;
-
-    if (!policy || !policy->dataset || !obs || !out_action || !result) {
-        return TKM_ERR;
-    }
-    dataset = policy->dataset;
-    use_full = !policy->has_cursor ||
-        policy->cursor + 1u >= dataset->row_count ||
-        (policy->reanchor_interval > 0u && step % policy->reanchor_interval == 0u);
-
-    if (use_full) {
-        start = 0;
-        count = dataset->row_count;
-        result->full_searches++;
-    } else {
-        next_cursor = policy->cursor + 1u;
-        start = next_cursor > policy->window_radius ? next_cursor - policy->window_radius : 0u;
-        count = policy->window_radius * 2u + 1u;
-        if (start + count > dataset->row_count) {
-            count = dataset->row_count - start;
-        }
-        result->window_searches++;
-    }
-
-    if (breakout_pufferlib_nearest_predict_range(
-            dataset, obs, start, count, out_action, &found_index, &distance) != TKM_OK) {
-        return TKM_ERR;
-    }
-    (void)distance;
-    policy->cursor = found_index;
-    policy->has_cursor = 1u;
-    return TKM_OK;
-}
-
-static int sequence_cursor_action(
-    BenchPolicy* policy,
-    const float* obs,
-    uint32_t step,
-    uint8_t* out_action,
-    BenchResult* result
-) {
-    BreakoutPufferlibSequenceMatch match;
-
-    if (!policy || !policy->dataset || !obs || !out_action || !result) {
-        return TKM_ERR;
-    }
-    if (breakout_pufferlib_sequence_cursor_predict(
-            policy->dataset,
-            &policy->sequence_cursor,
-            obs,
-            step,
-            out_action,
-            &match,
-            NULL,
-            NULL) != TKM_OK) {
-        return TKM_ERR;
-    }
-    if (match == BREAKOUT_PUFFERLIB_SEQUENCE_MATCH_FULL_SEARCH) {
-        result->full_searches++;
-    } else {
-        result->window_searches++;
-    }
-    return TKM_OK;
-}
-
 static int policy_action(
     BenchPolicy* policy,
     const float* obs,
@@ -259,22 +158,12 @@ static int policy_action(
     uint8_t* out_action,
     BenchResult* result
 ) {
-    if (!policy || !obs || !out_action || !result) {
+    (void)step;
+    (void)result;
+    if (!policy || policy->method != BENCH_METHOD_TOKEN || !obs || !out_action) {
         return TKM_ERR;
     }
-    if (policy->method == BENCH_METHOD_MLP) {
-        return breakout_pufferlib_policy_predict(policy->policy, obs, out_action);
-    }
-    if (policy->method == BENCH_METHOD_INTERCEPT) {
-        return breakout_pufferlib_intercept_policy_predict(&policy->intercept_policy, obs, out_action);
-    }
-    if (policy->method == BENCH_METHOD_TOKEN) {
-        return breakout_pufferlib_token_policy_predict(policy->token_policy, obs, out_action);
-    }
-    if (policy->method == BENCH_METHOD_SEQUENCE_CURSOR) {
-        return sequence_cursor_action(policy, obs, step, out_action, result);
-    }
-    return nearest_window_action(policy, obs, step, out_action, result);
+    return breakout_pufferlib_token_policy_predict(policy->token_policy, obs, out_action);
 }
 
 static int eval_policy(
@@ -297,18 +186,7 @@ static int eval_policy(
     snprintf(result->name, sizeof(result->name), "%s", name);
     result->rows = policy->dataset ? policy->dataset->row_count : 0u;
     env = make_eval_env(seed);
-    policy->cursor = 0u;
-    policy->has_cursor = 0u;
-    if (policy->method == BENCH_METHOD_SEQUENCE_CURSOR &&
-        breakout_pufferlib_sequence_cursor_init(
-            &policy->sequence_cursor,
-            policy->reanchor_interval,
-            policy->max_sequence_distance) != TKM_OK) {
-        free_allocated(&env);
-        return TKM_ERR;
-    }
-    if (policy->method == BENCH_METHOD_TOKEN &&
-        breakout_pufferlib_token_policy_reset(policy->token_policy) != TKM_OK) {
+    if (breakout_pufferlib_token_policy_reset(policy->token_policy) != TKM_OK) {
         free_allocated(&env);
         return TKM_ERR;
     }
@@ -344,13 +222,7 @@ static int eval_policy(
             }
             episode_return = 0.0f;
             episode_length = 0u;
-            policy->has_cursor = 0u;
-            if (policy->method == BENCH_METHOD_SEQUENCE_CURSOR) {
-                breakout_pufferlib_sequence_cursor_reset(&policy->sequence_cursor);
-            }
-            if (policy->method == BENCH_METHOD_TOKEN) {
-                breakout_pufferlib_token_policy_reset(policy->token_policy);
-            }
+            breakout_pufferlib_token_policy_reset(policy->token_policy);
         }
     }
 
@@ -489,25 +361,14 @@ int main(int argc, char** argv) {
     uint32_t eval_episodes = read_u32_env("TKM_PUFFERLIB_BREAKOUT_EVAL_EPISODES", DEFAULT_EVAL_EPISODES);
     uint32_t max_steps = read_u32_env("TKM_PUFFERLIB_BREAKOUT_MAX_STEPS", DEFAULT_MAX_STEPS);
     uint32_t seed = read_u32_env("TKM_PUFFERLIB_BREAKOUT_EVAL_SEED", 0u);
-    uint32_t hidden = read_u32_env("TKM_PUFFERLIB_BREAKOUT_MLP_HIDDEN", 8u);
-    uint32_t epochs = read_u32_env("TKM_PUFFERLIB_BREAKOUT_MLP_EPOCHS", 12u);
-    uint32_t window_radius = read_u32_env("TKM_PUFFERLIB_BREAKOUT_WINDOW_RADIUS", DEFAULT_WINDOW_RADIUS);
-    uint32_t reanchor = read_u32_env("TKM_PUFFERLIB_BREAKOUT_REANCHOR_INTERVAL", DEFAULT_REANCHOR_INTERVAL);
-    float sequence_distance = (float)read_u32_env("TKM_PUFFERLIB_BREAKOUT_SEQUENCE_DISTANCE_MILLI", 500u) / 1000.0f;
-    float intercept_deadzone = (float)read_u32_env("TKM_PUFFERLIB_BREAKOUT_INTERCEPT_DEADZONE_MILLI", 30u) / 1000.0f;
-    float intercept_aim = ((float)((int32_t)read_u32_env("TKM_PUFFERLIB_BREAKOUT_INTERCEPT_AIM_MILLI", 0u))) / 1000.0f;
     static TkmFloatTransitionDataset all;
     static TkmFloatTransitionDataset top1;
     TkmIni token_ini;
-    BreakoutPufferlibPolicy mlp;
-    BreakoutPufferlibBcReport mlp_report;
     BreakoutPufferlibTokenPolicy token_policy;
     BreakoutPufferlibTokenPolicy token_top1_policy;
     BreakoutPufferlibTokenConfig token_config;
     BreakoutPufferlibTokenReport token_report;
     BreakoutPufferlibTokenReport token_top1_report;
-    BreakoutPufferlibInterceptPolicy intercept_trained;
-    BreakoutPufferlibInterceptReport intercept_report;
     BenchPolicy policy;
     BenchResult result;
     float replay_max_obs_distance = 0.0f;
@@ -552,79 +413,28 @@ int main(int argc, char** argv) {
     printf("dataset_replay_max_obs_distance=%.9g\n", replay_max_obs_distance);
 
     memset(&policy, 0, sizeof(policy));
-    policy.method = BENCH_METHOD_NEAREST_WINDOW;
-    policy.dataset = &all;
-    policy.window_radius = window_radius;
-    policy.reanchor_interval = reanchor;
-    if (eval_policy("nearest_window_all", &policy, seed, eval_episodes, max_steps, &result) != TKM_OK) {
-        fprintf(stderr, "nearest_window_all failed\n");
-        return 1;
-    }
-    print_result(&result);
-
-    memset(&policy, 0, sizeof(policy));
-    policy.method = BENCH_METHOD_SEQUENCE_CURSOR;
-    policy.dataset = &all;
-    policy.window_radius = window_radius;
-    policy.reanchor_interval = reanchor;
-    policy.max_sequence_distance = sequence_distance;
-    if (eval_policy("sequence_cursor_all", &policy, seed, eval_episodes, max_steps, &result) != TKM_OK) {
-        fprintf(stderr, "sequence_cursor_all failed\n");
-        return 1;
-    }
-    print_result(&result);
-
-    memset(&policy, 0, sizeof(policy));
-    policy.method = BENCH_METHOD_INTERCEPT;
-    policy.dataset = &all;
-    if (breakout_pufferlib_intercept_policy_init(
-            &policy.intercept_policy, intercept_deadzone, intercept_aim) != TKM_OK ||
-        eval_policy("intercept_rule", &policy, seed, eval_episodes, max_steps, &result) != TKM_OK) {
-        fprintf(stderr, "intercept_rule failed\n");
-        return 1;
-    }
-    print_result(&result);
-
-    if (breakout_pufferlib_intercept_policy_train_grid(
-            &intercept_trained, &all, &intercept_report) != TKM_OK) {
-        fprintf(stderr, "intercept training failed\n");
-        return 1;
-    }
-    printf("intercept_train rows=%u train_rows=%u heldout_rows=%u heldout_accuracy=%.3f deadzone=%.3f aim_offset=%.3f\n",
-        intercept_report.source_rows,
-        intercept_report.train_rows,
-        intercept_report.heldout_rows,
-        intercept_report.heldout_accuracy,
-        intercept_report.deadzone,
-        intercept_report.aim_offset);
-
-    memset(&policy, 0, sizeof(policy));
-    policy.method = BENCH_METHOD_INTERCEPT;
-    policy.dataset = &all;
-    policy.intercept_policy = intercept_trained;
-    if (eval_policy("intercept_trained", &policy, seed, eval_episodes, max_steps, &result) != TKM_OK) {
-        fprintf(stderr, "intercept_trained failed\n");
-        return 1;
-    }
-    print_result(&result);
-
     if (breakout_pufferlib_token_policy_train(
             &token_policy, &all, &token_config, &token_report) != TKM_OK) {
         fprintf(stderr, "token policy training failed\n");
         return 1;
     }
-    printf("token_layers layout=%s tokenizer=%s model=%s head=%s\n",
+    printf("token_layers layout=%s tokenizer=%s selection=%s input=%s model=%s head=%s\n",
         token_report.sequence_layout_name,
         token_report.observation_tokenizer_name,
+        token_report.observation_selection_name,
+        token_report.input_feature_name,
         token_report.sequence_model_name,
         token_report.action_head_name);
-    printf("token_train rows=%u train_rows=%u heldout_rows=%u heldout_accuracy=%.3f obs_token_accuracy=%.3f action_token_accuracy=%.3f bins=%u dims=%u history=%u epochs=%u learning_rate=%.5f input_dim=%u hidden=%u pair_features=%u\n",
+    printf("token_train rows=%u train_rows=%u heldout_rows=%u heldout_accuracy=%.3f obs_token_accuracy=%.3f action_token_accuracy=%.3f exact=%u backoff=%u prior=%u bins=%u dims=%u history=%u epochs=%u learning_rate=%.5f input_dim=%u hidden=%u pair_features=%u\n",
         token_report.source_rows,
         token_report.train_rows,
         token_report.heldout_rows,
         token_report.heldout_accuracy,
         token_report.obs_token_accuracy,
         token_report.action_token_accuracy,
+        token_report.exact_predictions,
+        token_report.backoff_predictions,
+        token_report.prior_predictions,
         token_report.bin_count,
         token_report.selected_dim_count,
         token_policy.history,
@@ -654,18 +464,23 @@ int main(int argc, char** argv) {
         fprintf(stderr, "token top1 policy training failed\n");
         return 1;
     }
-    printf("token_top1_layers layout=%s tokenizer=%s model=%s head=%s\n",
+    printf("token_top1_layers layout=%s tokenizer=%s selection=%s input=%s model=%s head=%s\n",
         token_top1_report.sequence_layout_name,
         token_top1_report.observation_tokenizer_name,
+        token_top1_report.observation_selection_name,
+        token_top1_report.input_feature_name,
         token_top1_report.sequence_model_name,
         token_top1_report.action_head_name);
-    printf("token_top1_train rows=%u train_rows=%u heldout_rows=%u heldout_accuracy=%.3f obs_token_accuracy=%.3f action_token_accuracy=%.3f bins=%u dims=%u history=%u epochs=%u learning_rate=%.5f input_dim=%u hidden=%u pair_features=%u\n",
+    printf("token_top1_train rows=%u train_rows=%u heldout_rows=%u heldout_accuracy=%.3f obs_token_accuracy=%.3f action_token_accuracy=%.3f exact=%u backoff=%u prior=%u bins=%u dims=%u history=%u epochs=%u learning_rate=%.5f input_dim=%u hidden=%u pair_features=%u\n",
         token_top1_report.source_rows,
         token_top1_report.train_rows,
         token_top1_report.heldout_rows,
         token_top1_report.heldout_accuracy,
         token_top1_report.obs_token_accuracy,
         token_top1_report.action_token_accuracy,
+        token_top1_report.exact_predictions,
+        token_top1_report.backoff_predictions,
+        token_top1_report.prior_predictions,
         token_top1_report.bin_count,
         token_top1_report.selected_dim_count,
         token_top1_policy.history,
@@ -686,39 +501,6 @@ int main(int argc, char** argv) {
     policy.token_policy = &token_top1_policy;
     if (eval_policy(token_result_name(&token_top1_report, 1u), &policy, seed, eval_episodes, max_steps, &result) != TKM_OK) {
         fprintf(stderr, "%s failed\n", token_result_name(&token_top1_report, 1u));
-        return 1;
-    }
-    print_result(&result);
-
-    memset(&policy, 0, sizeof(policy));
-    policy.method = BENCH_METHOD_NEAREST_WINDOW;
-    policy.dataset = &top1;
-    policy.window_radius = window_radius;
-    policy.reanchor_interval = reanchor;
-    if (eval_policy("nearest_window_top1", &policy, seed, eval_episodes, max_steps, &result) != TKM_OK) {
-        fprintf(stderr, "nearest_window_top1 failed\n");
-        return 1;
-    }
-    print_result(&result);
-
-    if (train_mlp(&all, hidden, epochs, 0.03f, &mlp, &mlp_report) != TKM_OK) {
-        fprintf(stderr, "mlp training failed\n");
-        return 1;
-    }
-    printf("mlp_train rows=%u train_rows=%u heldout_rows=%u heldout_accuracy=%.3f hidden=%u epochs=%u\n",
-        mlp_report.source_rows,
-        mlp_report.train_rows,
-        mlp_report.heldout_rows,
-        mlp_report.heldout_accuracy,
-        hidden,
-        epochs);
-
-    memset(&policy, 0, sizeof(policy));
-    policy.method = BENCH_METHOD_MLP;
-    policy.dataset = &all;
-    policy.policy = &mlp;
-    if (eval_policy("mlp_all", &policy, seed, eval_episodes, max_steps, &result) != TKM_OK) {
-        fprintf(stderr, "mlp_all failed\n");
         return 1;
     }
     print_result(&result);

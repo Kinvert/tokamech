@@ -19,9 +19,8 @@ static void test_layer_config_reads_known_kinds_from_ini(void) {
         "[sequence_layout]\n"
         "kind = joint_transition\n"
         "[model]\n"
-        "kind = planner_oracle\n"
+        "kind = ngram\n"
         "hidden_dim = 64\n"
-        "action_features = food_space\n"
         "[head]\n"
         "kind = categorical\n"
         "[decoder]\n"
@@ -36,9 +35,8 @@ static void test_layer_config_reads_known_kinds_from_ini(void) {
     CHECK(config.tokenizer == TKM_TOKENIZER_VQ_CODE);
     CHECK(config.embedder == TKM_EMBEDDER_LINEAR);
     CHECK(config.sequence_layout == TKM_SEQUENCE_LAYOUT_JOINT_TRANSITION);
-    CHECK(config.model == TKM_MODEL_PLANNER_ORACLE);
+    CHECK(config.model == TKM_MODEL_NGRAM);
     CHECK(config.model_hidden_dim == 64);
-    CHECK(config.action_features == TKM_ACTION_FEATURE_FOOD_SPACE);
     CHECK(config.head == TKM_HEAD_CATEGORICAL);
     CHECK(config.decoder == TKM_DECODER_ARGMAX);
     CHECK(config.loss == TKM_LOSS_HUBER);
@@ -55,7 +53,6 @@ static void test_layer_config_uses_phase0_defaults(void) {
     CHECK(config.sequence_layout == TKM_SEQUENCE_LAYOUT_OBS_ACTION_INTERLEAVED);
     CHECK(config.model == TKM_MODEL_LOOKUP_POLICY);
     CHECK(config.model_hidden_dim == 32);
-    CHECK(config.action_features == TKM_ACTION_FEATURE_SPACE);
     CHECK(config.head == TKM_HEAD_CATEGORICAL);
     CHECK(config.decoder == TKM_DECODER_ARGMAX);
     CHECK(config.loss == TKM_LOSS_CROSS_ENTROPY);
@@ -84,14 +81,10 @@ static void test_layer_kind_string_parsers_reject_unknown_values(void) {
     CHECK(model == TKM_MODEL_LOOKUP_POLICY);
     CHECK(tkm_model_kind_from_string("ngram", &model) == TKM_OK);
     CHECK(model == TKM_MODEL_NGRAM);
+    CHECK(tkm_model_kind_from_string("planner_oracle", &model) == TKM_ERR);
     CHECK(tkm_model_kind_from_string("sparse_lookup", &model) == TKM_OK);
     CHECK(model == TKM_MODEL_SPARSE_LOOKUP);
-    CHECK(tkm_model_kind_from_string("nearest_policy", &model) == TKM_OK);
-    CHECK(model == TKM_MODEL_NEAREST_POLICY);
-    CHECK(tkm_model_kind_from_string("linear_policy", &model) == TKM_OK);
-    CHECK(model == TKM_MODEL_LINEAR_POLICY);
-    CHECK(tkm_model_kind_from_string("action_scorer", &model) == TKM_OK);
-    CHECK(model == TKM_MODEL_ACTION_SCORER);
+    CHECK(tkm_model_kind_from_string("direct_policy", &model) == TKM_ERR);
     CHECK(tkm_head_kind_from_string("categorical", &head) == TKM_OK);
     CHECK(head == TKM_HEAD_CATEGORICAL);
     CHECK(tkm_decoder_kind_from_string("argmax", &decoder) == TKM_OK);
@@ -114,8 +107,6 @@ static void test_layer_kind_string_parsers_reject_unknown_values(void) {
     CHECK(tkm_ini_parse(&ini, "[model]\nhidden_dim = 0\n") == TKM_OK);
     CHECK(tkm_layer_config_from_ini(&ini, &config) == TKM_ERR);
     CHECK(tkm_ini_parse(&ini, "[model]\nhidden_dim = many\n") == TKM_OK);
-    CHECK(tkm_layer_config_from_ini(&ini, &config) == TKM_ERR);
-    CHECK(tkm_ini_parse(&ini, "[model]\naction_features = unknown\n") == TKM_OK);
     CHECK(tkm_layer_config_from_ini(&ini, &config) == TKM_ERR);
 }
 

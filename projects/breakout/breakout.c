@@ -301,42 +301,31 @@ uint16_t breakout_tokenize_observation(const float* observations) {
     return breakout_make_policy_token(0);
 }
 
-uint8_t breakout_oracle_action_from_token(uint16_t token) {
-    if (token < breakout_make_policy_token(0)) {
-        return BREAKOUT_LEFT;
-    }
-    if (token > breakout_make_policy_token(0)) {
-        return BREAKOUT_RIGHT;
-    }
-    return BREAKOUT_NOOP;
-}
-
-uint8_t breakout_oracle_action(const BreakoutEnv* env) {
-    return breakout_oracle_action_from_token(breakout_tokenize_observation(env->observations));
+uint8_t breakout_exploration_action(uint32_t step) {
+    const uint8_t pattern[] = {
+        BREAKOUT_NOOP, BREAKOUT_LEFT, BREAKOUT_RIGHT, BREAKOUT_NOOP,
+        BREAKOUT_RIGHT, BREAKOUT_LEFT, BREAKOUT_NOOP, BREAKOUT_LEFT,
+        BREAKOUT_RIGHT, BREAKOUT_RIGHT, BREAKOUT_LEFT, BREAKOUT_NOOP
+    };
+    return pattern[step % (sizeof(pattern) / sizeof(pattern[0]))];
 }
 
 int breakout_policy_tokenizer_init(TkmIntBins* tokenizer) {
     return tkm_int_bins_init(tokenizer, 0, 4);
 }
 
-int breakout_collect_oracle_tokens(TkmTrajectory* trajectory) {
+int breakout_collect_exploration_tokens(TkmTrajectory* trajectory) {
     BreakoutEnv env;
-    breakout_env_init_default(&env);
 
-    for (int bucket = -2; bucket <= 2; bucket++) {
-        uint16_t token = breakout_make_policy_token(bucket);
-        uint8_t action = breakout_oracle_action_from_token(token);
-        for (int repeat = 0; repeat < 8; repeat++) {
-            if (tkm_trajectory_append(trajectory, (int32_t)token, action, 0.0f, 0) != TKM_OK) {
-                return TKM_ERR;
-            }
-        }
+    if (!trajectory) {
+        return TKM_ERR;
     }
 
+    breakout_env_init_default(&env);
     breakout_reset(&env);
     for (uint32_t i = 0; i < 180 && !env.terminal; i++) {
         uint16_t token = breakout_tokenize_observation(env.observations);
-        uint8_t action = breakout_oracle_action_from_token(token);
+        uint8_t action = breakout_exploration_action(i);
         float reward = 0.0f;
         uint8_t terminal = 0;
         if (breakout_step_env(&env, action, &reward, &terminal) != TKM_OK) {

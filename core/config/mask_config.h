@@ -5,8 +5,7 @@
 #include "core/config/ini.h"
 
 typedef enum {
-    TKM_MASK_STRATEGY_IMMEDIATE = 0,
-    TKM_MASK_STRATEGY_SURVIVAL = 1,
+    TKM_MASK_STRATEGY_NONE = 0,
 } TkmMaskStrategyKind;
 
 typedef struct {

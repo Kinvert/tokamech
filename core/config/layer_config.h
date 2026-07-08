@@ -30,21 +30,10 @@ typedef enum {
 
 typedef enum {
     TKM_MODEL_LOOKUP_POLICY = 0,
-    TKM_MODEL_PLANNER_ORACLE = 1,
     TKM_MODEL_NGRAM = 2,
-    TKM_MODEL_MLP_WINDOW = 3,
     TKM_MODEL_SPARSE_LOOKUP = 4,
-    TKM_MODEL_NEAREST_POLICY = 5,
-    TKM_MODEL_LINEAR_POLICY = 6,
-    TKM_MODEL_ACTION_SCORER = 7,
     TKM_MODEL_TRANSFORMER_DECODER = 8,
 } TkmModelKind;
-
-typedef enum {
-    TKM_ACTION_FEATURE_BASIC = 0,
-    TKM_ACTION_FEATURE_SPACE = 1,
-    TKM_ACTION_FEATURE_FOOD_SPACE = 2,
-} TkmActionFeatureKind;
 
 typedef enum {
     TKM_HEAD_CATEGORICAL = 0,
@@ -74,7 +63,6 @@ typedef struct {
     TkmSequenceLayoutKind sequence_layout;
     TkmModelKind model;
     uint32_t model_hidden_dim;
-    TkmActionFeatureKind action_features;
     TkmHeadKind head;
     TkmDecoderKind decoder;
     TkmConfiguredLossKind loss;
@@ -84,7 +72,6 @@ int tkm_tokenizer_kind_from_string(const char* text, TkmTokenizerKind* out);
 int tkm_embedder_kind_from_string(const char* text, TkmEmbedderKind* out);
 int tkm_sequence_layout_kind_from_string(const char* text, TkmSequenceLayoutKind* out);
 int tkm_model_kind_from_string(const char* text, TkmModelKind* out);
-int tkm_action_feature_kind_from_string(const char* text, TkmActionFeatureKind* out);
 int tkm_head_kind_from_string(const char* text, TkmHeadKind* out);
 int tkm_decoder_kind_from_string(const char* text, TkmDecoderKind* out);
 int tkm_loss_kind_from_string(const char* text, TkmConfiguredLossKind* out);

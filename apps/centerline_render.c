@@ -25,14 +25,14 @@ static void fail_if(int status, const char* label) {
     }
 }
 
-static void add_oracle_episode(TkmTrajectory* trajectory, int16_t start_offset) {
+static void add_exploration_episode(TkmTrajectory* trajectory, int16_t start_offset) {
     CenterlineConfig cfg = {
         .start_offset = start_offset,
         .limit = 4,
         .horizon = 12,
     };
 
-    fail_if(centerline_collect_oracle(&cfg, trajectory), "centerline_collect_oracle");
+    fail_if(centerline_collect_exploration(&cfg, trajectory), "centerline_collect_exploration");
 }
 
 static const char* action_name(uint8_t action) {
@@ -96,7 +96,7 @@ int main(void) {
     fail_if(tkm_int_bins_init(&tokenizer, -4, 4), "tkm_int_bins_init");
 
     for (int16_t start = -4; start <= 4; start++) {
-        add_oracle_episode(&dataset, start);
+        add_exploration_episode(&dataset, start);
     }
 
     fail_if(tkm_lookup_policy_train(&policy, &tokenizer, &dataset, CENTERLINE_ACTION_COUNT), "tkm_lookup_policy_train");

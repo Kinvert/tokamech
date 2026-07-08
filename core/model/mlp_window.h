@@ -42,12 +42,5 @@ int tkm_mlp_window_train_cross_entropy(
     uint16_t target_index,
     float learning_rate
 );
-int tkm_mlp_window_train_masked_cross_entropy(
-    TkmMlpWindow* mlp,
-    const float* input,
-    const uint8_t* valid_mask,
-    uint16_t target_index,
-    float learning_rate
-);
 
 #endif

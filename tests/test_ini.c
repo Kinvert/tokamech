@@ -47,13 +47,13 @@ static void test_ini_uses_defaults_and_later_entries_override_earlier_entries(vo
     const char* text =
         "[model]\n"
         "kind = lookup_policy\n"
-        "kind = planner_oracle\n";
+        "kind = ngram\n";
     TkmIni ini;
     int32_t missing_i32 = 0;
     float missing_f32 = 0.0f;
 
     CHECK(tkm_ini_parse(&ini, text) == TKM_OK);
-    CHECK(strcmp(tkm_ini_get(&ini, "model", "kind", ""), "planner_oracle") == 0);
+    CHECK(strcmp(tkm_ini_get(&ini, "model", "kind", ""), "ngram") == 0);
     CHECK(strcmp(tkm_ini_get(&ini, "model", "missing", "fallback"), "fallback") == 0);
     CHECK(tkm_ini_get_i32(&ini, "model", "missing_i32", 7, &missing_i32) == TKM_OK);
     CHECK(missing_i32 == 7);
@@ -67,11 +67,11 @@ static void test_ini_parse_file_loads_project_configs(void) {
     TkmIni ini;
 
     CHECK(file != 0);
-    CHECK(fputs("[train]\nloss = masked_cross_entropy\n", file) >= 0);
+    CHECK(fputs("[train]\nloss = cross_entropy\n", file) >= 0);
     CHECK(fclose(file) == 0);
 
     CHECK(tkm_ini_parse_file(&ini, path) == TKM_OK);
-    CHECK(strcmp(tkm_ini_get(&ini, "train", "loss", ""), "masked_cross_entropy") == 0);
+    CHECK(strcmp(tkm_ini_get(&ini, "train", "loss", ""), "cross_entropy") == 0);
     CHECK(tkm_ini_parse_file(&ini, "build/missing_test_ini_parse_file.ini") == TKM_ERR);
     CHECK(tkm_ini_parse_file(0, path) == TKM_ERR);
     CHECK(tkm_ini_parse_file(&ini, 0) == TKM_ERR);

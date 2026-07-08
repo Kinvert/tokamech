@@ -99,55 +99,16 @@ int tkm_model_kind_from_string(const char* text, TkmModelKind* out) {
         *out = TKM_MODEL_LOOKUP_POLICY;
         return TKM_OK;
     }
-    if (tkm_match(text, "planner_oracle")) {
-        *out = TKM_MODEL_PLANNER_ORACLE;
-        return TKM_OK;
-    }
     if (tkm_match(text, "ngram")) {
         *out = TKM_MODEL_NGRAM;
-        return TKM_OK;
-    }
-    if (tkm_match(text, "mlp_window")) {
-        *out = TKM_MODEL_MLP_WINDOW;
         return TKM_OK;
     }
     if (tkm_match(text, "sparse_lookup")) {
         *out = TKM_MODEL_SPARSE_LOOKUP;
         return TKM_OK;
     }
-    if (tkm_match(text, "nearest_policy")) {
-        *out = TKM_MODEL_NEAREST_POLICY;
-        return TKM_OK;
-    }
-    if (tkm_match(text, "linear_policy")) {
-        *out = TKM_MODEL_LINEAR_POLICY;
-        return TKM_OK;
-    }
-    if (tkm_match(text, "action_scorer")) {
-        *out = TKM_MODEL_ACTION_SCORER;
-        return TKM_OK;
-    }
     if (tkm_match(text, "transformer_decoder")) {
         *out = TKM_MODEL_TRANSFORMER_DECODER;
-        return TKM_OK;
-    }
-    return TKM_ERR;
-}
-
-int tkm_action_feature_kind_from_string(const char* text, TkmActionFeatureKind* out) {
-    if (!text || !out) {
-        return TKM_ERR;
-    }
-    if (tkm_match(text, "basic")) {
-        *out = TKM_ACTION_FEATURE_BASIC;
-        return TKM_OK;
-    }
-    if (tkm_match(text, "space")) {
-        *out = TKM_ACTION_FEATURE_SPACE;
-        return TKM_OK;
-    }
-    if (tkm_match(text, "food_space")) {
-        *out = TKM_ACTION_FEATURE_FOOD_SPACE;
         return TKM_OK;
     }
     return TKM_ERR;
@@ -232,7 +193,6 @@ int tkm_layer_config_from_ini(const TkmIni* ini, TkmLayerConfig* out) {
     const char* sequence_layout;
     const char* model;
     const char* model_hidden_dim;
-    const char* action_features;
     const char* head;
     const char* decoder;
     const char* loss;
@@ -246,7 +206,6 @@ int tkm_layer_config_from_ini(const TkmIni* ini, TkmLayerConfig* out) {
     sequence_layout = tkm_ini_get(ini, "sequence_layout", "kind", "obs_action_interleaved");
     model = tkm_ini_get(ini, "model", "kind", "lookup_policy");
     model_hidden_dim = tkm_ini_get(ini, "model", "hidden_dim", "32");
-    action_features = tkm_ini_get(ini, "model", "action_features", "space");
     head = tkm_ini_get(ini, "head", "kind", "categorical");
     decoder = tkm_ini_get(ini, "decoder", "kind", "argmax");
     loss = tkm_ini_get(ini, "loss", "kind", "cross_entropy");
@@ -266,9 +225,6 @@ int tkm_layer_config_from_ini(const TkmIni* ini, TkmLayerConfig* out) {
     if (tkm_parse_u32(model_hidden_dim, &out->model_hidden_dim) != TKM_OK ||
         out->model_hidden_dim == 0 ||
         out->model_hidden_dim > TKM_LAYER_MAX_MODEL_HIDDEN_DIM) {
-        return TKM_ERR;
-    }
-    if (tkm_action_feature_kind_from_string(action_features, &out->action_features) != TKM_OK) {
         return TKM_ERR;
     }
     if (tkm_head_kind_from_string(head, &out->head) != TKM_OK) {

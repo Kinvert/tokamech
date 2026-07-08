@@ -95,7 +95,7 @@ int main(void) {
     int frame = 0;
 
     tkm_trajectory_init(&dataset);
-    fail_if(breakout_collect_oracle_tokens(&dataset), "breakout_collect_oracle_tokens");
+    fail_if(breakout_collect_exploration_tokens(&dataset), "breakout_collect_exploration_tokens");
     fail_if(breakout_policy_tokenizer_init(&tokenizer), "breakout_policy_tokenizer_init");
     fail_if(tkm_lookup_policy_train(&policy, &tokenizer, &dataset, BREAKOUT_ACTION_COUNT), "tkm_lookup_policy_train");
 

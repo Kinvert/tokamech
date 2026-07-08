@@ -23,6 +23,13 @@ int tkm_sparse_lookup_policy_train(
     uint8_t num_actions,
     uint8_t default_action
 );
+int tkm_sparse_lookup_policy_train_return_weighted(
+    TkmSparseLookupPolicy* policy,
+    const TkmTrajectory* trajectory,
+    uint8_t num_actions,
+    uint8_t default_action,
+    float discount
+);
 uint8_t tkm_sparse_lookup_policy_predict(const TkmSparseLookupPolicy* policy, int32_t token);
 
 #endif

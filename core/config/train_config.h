@@ -16,9 +16,8 @@
 
 typedef enum {
     TKM_TRAIN_LOSS_CROSS_ENTROPY = 0,
-    TKM_TRAIN_LOSS_MASKED_CROSS_ENTROPY = 1,
-    TKM_TRAIN_LOSS_MSE = 2,
-    TKM_TRAIN_LOSS_MARGIN = 3,
+    TKM_TRAIN_LOSS_MSE = 1,
+    TKM_TRAIN_LOSS_MARGIN = 2,
 } TkmTrainLossKind;
 
 typedef struct {

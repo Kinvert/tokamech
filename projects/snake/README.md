@@ -18,8 +18,8 @@ Phase 2 uses the current Tokamech token path:
 ```text
 flat Snake env state
 -> compact relative-food/local-danger/direction token
--> BFS oracle trajectories
--> lookup/count policy
+-> deterministic exploration trajectories
+-> lookup/count next-token policy
 -> closed-loop runtime
 ```
 

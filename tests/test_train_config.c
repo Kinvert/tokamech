@@ -13,7 +13,7 @@
 static void test_train_config_reads_loss_from_ini(void) {
     const char* text =
         "[train]\n"
-        "loss = masked_cross_entropy\n"
+        "loss = cross_entropy\n"
         "rollout_steps = 240\n"
         "dagger_rounds = 6\n"
         "learning_rate = 0.02\n"
@@ -23,7 +23,7 @@ static void test_train_config_reads_loss_from_ini(void) {
 
     CHECK(tkm_ini_parse(&ini, text) == TKM_OK);
     CHECK(tkm_train_config_from_ini(&ini, &config) == TKM_OK);
-    CHECK(config.loss == TKM_TRAIN_LOSS_MASKED_CROSS_ENTROPY);
+    CHECK(config.loss == TKM_TRAIN_LOSS_CROSS_ENTROPY);
     CHECK(config.rollout_steps == 240);
     CHECK(config.dagger_rounds == 6);
     CHECK(config.learning_rate > 0.019f && config.learning_rate < 0.021f);
@@ -43,15 +43,13 @@ static void test_train_config_uses_simple_defaults(void) {
     CHECK(config.dagger_learning_rate > 0.004f && config.dagger_learning_rate < 0.006f);
 }
 
-static void test_train_loss_parser_accepts_interchangeable_options(void) {
+static void test_train_loss_parser_accepts_supported_options(void) {
     TkmTrainLossKind loss;
     TkmIni ini;
     TkmTrainConfig config;
 
     CHECK(tkm_train_loss_kind_from_string("cross_entropy", &loss) == TKM_OK);
     CHECK(loss == TKM_TRAIN_LOSS_CROSS_ENTROPY);
-    CHECK(tkm_train_loss_kind_from_string("masked_cross_entropy", &loss) == TKM_OK);
-    CHECK(loss == TKM_TRAIN_LOSS_MASKED_CROSS_ENTROPY);
     CHECK(tkm_train_loss_kind_from_string("mse", &loss) == TKM_OK);
     CHECK(loss == TKM_TRAIN_LOSS_MSE);
     CHECK(tkm_train_loss_kind_from_string("margin", &loss) == TKM_OK);
@@ -86,7 +84,7 @@ static void test_train_loss_parser_accepts_interchangeable_options(void) {
 int main(void) {
     test_train_config_reads_loss_from_ini();
     test_train_config_uses_simple_defaults();
-    test_train_loss_parser_accepts_interchangeable_options();
+    test_train_loss_parser_accepts_supported_options();
     puts("train config tests passed");
     return 0;
 }

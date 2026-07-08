@@ -34,6 +34,18 @@ static void test_ngram_predicts_lowest_token_on_ties_and_zero_for_unknown_contex
     CHECK(token == 0);
 }
 
+static void test_ngram_weighted_transition_can_override_raw_frequency(void) {
+    TkmNgramModel model;
+    uint16_t token = 0;
+
+    CHECK(tkm_ngram_init(&model, 8) == TKM_OK);
+    CHECK(tkm_ngram_add_weighted_transition(&model, 1, 2, 1) == TKM_OK);
+    CHECK(tkm_ngram_add_weighted_transition(&model, 1, 2, 1) == TKM_OK);
+    CHECK(tkm_ngram_add_weighted_transition(&model, 1, 3, 3) == TKM_OK);
+    CHECK(tkm_ngram_predict_next(&model, 1, &token) == TKM_OK);
+    CHECK(token == 3);
+}
+
 static void test_ngram_rejects_bad_inputs(void) {
     const uint16_t sequence[2] = {0, 1};
     TkmNgramModel model;
@@ -47,6 +59,10 @@ static void test_ngram_rejects_bad_inputs(void) {
     CHECK(tkm_ngram_train_sequence(&model, sequence, 1) == TKM_ERR);
     CHECK(tkm_ngram_train_sequence(&model, sequence, 2) == TKM_OK);
     CHECK(tkm_ngram_train_sequence(&model, (const uint16_t[]){0, 8}, 2) == TKM_ERR);
+    CHECK(tkm_ngram_add_weighted_transition(0, 0, 1, 1) == TKM_ERR);
+    CHECK(tkm_ngram_add_weighted_transition(&model, 8, 1, 1) == TKM_ERR);
+    CHECK(tkm_ngram_add_weighted_transition(&model, 0, 8, 1) == TKM_ERR);
+    CHECK(tkm_ngram_add_weighted_transition(&model, 0, 1, 0) == TKM_ERR);
     CHECK(tkm_ngram_predict_next(&model, 8, &token) == TKM_ERR);
     CHECK(tkm_ngram_predict_next(&model, 0, 0) == TKM_ERR);
 }
@@ -54,6 +70,7 @@ static void test_ngram_rejects_bad_inputs(void) {
 int main(void) {
     test_ngram_trains_bigram_counts_and_predicts_most_common_next_token();
     test_ngram_predicts_lowest_token_on_ties_and_zero_for_unknown_context();
+    test_ngram_weighted_transition_can_override_raw_frequency();
     test_ngram_rejects_bad_inputs();
     puts("ngram model tests passed");
     return 0;

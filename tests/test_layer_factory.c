@@ -174,72 +174,6 @@ static void test_factory_constructs_linear_embedder_from_ini_and_params(void) {
     check_close(output[2], 6.5f);
 }
 
-static void test_factory_constructs_mlp_window_from_ini_and_params(void) {
-    const char* ini_text =
-        "[model]\n"
-        "kind = mlp_window\n"
-        "input_dim = 2\n"
-        "hidden_dim = 3\n"
-        "output_dim = 2\n"
-        "w0 = mlp_w0\n"
-        "b0 = mlp_b0\n"
-        "w1 = mlp_w1\n"
-        "b1 = mlp_b1\n";
-    const char* param_text =
-        "mlp_w0 = 1.0 -1.0 0.5 0.0 2.0 -1.0\n"
-        "mlp_b0 = 0.0 -1.0 0.5\n"
-        "mlp_w1 = 1.0 0.0 0.5 1.0 -1.0 2.0\n"
-        "mlp_b1 = 0.25 -0.25\n";
-    const float input[2] = {2.0f, 3.0f};
-    TkmIni ini;
-    TkmParams params;
-    TkmMlpWindow mlp;
-    float output[2] = {0.0f, 0.0f};
-
-    CHECK(tkm_ini_parse(&ini, ini_text) == TKM_OK);
-    CHECK(tkm_params_parse_text(&params, param_text) == TKM_OK);
-    CHECK(tkm_layer_factory_init_mlp_window(&ini, &params, &mlp) == TKM_OK);
-    CHECK(mlp.input_dim == 2);
-    CHECK(mlp.hidden_dim == 3);
-    CHECK(mlp.output_dim == 2);
-    CHECK(tkm_mlp_window_forward(&mlp, input, output, 2) == TKM_OK);
-    check_close(output[0], 3.75f);
-    check_close(output[1], 2.75f);
-}
-
-static void test_factory_constructs_action_scorer_from_ini_and_params(void) {
-    const char* ini_text =
-        "[model]\n"
-        "kind = action_scorer\n"
-        "state_dim = 1\n"
-        "action_dim = 2\n"
-        "hidden_dim = 1\n"
-        "w0 = scorer_w0\n"
-        "b0 = scorer_b0\n"
-        "w1 = scorer_w1\n"
-        "b1 = scorer_b1\n";
-    const char* param_text =
-        "scorer_w0 = 0.0 1.0 1.0\n"
-        "scorer_b0 = 0.0\n"
-        "scorer_w1 = 1.0\n"
-        "scorer_b1 = 0.0\n";
-    const float state[1] = {0.0f};
-    const float action[2] = {0.0f, 3.0f};
-    TkmIni ini;
-    TkmParams params;
-    TkmActionScorer scorer;
-    float score = 0.0f;
-
-    CHECK(tkm_ini_parse(&ini, ini_text) == TKM_OK);
-    CHECK(tkm_params_parse_text(&params, param_text) == TKM_OK);
-    CHECK(tkm_layer_factory_init_action_scorer(&ini, &params, &scorer) == TKM_OK);
-    CHECK(scorer.state_dim == 1);
-    CHECK(scorer.action_dim == 2);
-    CHECK(scorer.mlp.hidden_dim == 1);
-    CHECK(tkm_action_scorer_score(&scorer, state, action, &score) == TKM_OK);
-    check_close(score, 3.0f);
-}
-
 static void test_factory_rejects_missing_required_fields_and_wrong_kinds(void) {
     TkmIni ini;
     TkmParams params;
@@ -249,8 +183,6 @@ static void test_factory_rejects_missing_required_fields_and_wrong_kinds(void) {
     TkmVqCode vq;
     TkmLookupEmbedder lookup_embedder;
     TkmLinearEmbedder linear_embedder;
-    TkmMlpWindow mlp;
-    TkmActionScorer scorer;
 
     CHECK(tkm_ini_parse(&ini, "[tokenizer]\nkind = int_bins\nmin = -4\n") == TKM_OK);
     CHECK(tkm_layer_factory_init_int_bins(&ini, &bins) == TKM_ERR);
@@ -262,7 +194,7 @@ static void test_factory_rejects_missing_required_fields_and_wrong_kinds(void) {
     CHECK(tkm_ini_parse(&ini, "[tokenizer]\nkind = raw_continuous\n") == TKM_OK);
     CHECK(tkm_layer_factory_init_raw_continuous(&ini, &vectorizer) == TKM_ERR);
 
-    CHECK(tkm_ini_parse(&ini, "[model]\nkind = mlp_window\ninput_dim = 2\n") == TKM_OK);
+    CHECK(tkm_ini_parse(&ini, "[model]\nkind = lookup_policy\ninput_dim = 2\n") == TKM_OK);
     CHECK(tkm_layer_factory_init_ngram(&ini, &model) == TKM_ERR);
 
     CHECK(tkm_ini_parse(&ini, "[model]\nkind = ngram\n") == TKM_OK);
@@ -289,10 +221,6 @@ static void test_factory_rejects_missing_required_fields_and_wrong_kinds(void) {
     CHECK(tkm_layer_factory_init_lookup_embedder(&ini, &params, &lookup_embedder) == TKM_ERR);
     CHECK(tkm_ini_parse(&ini, "[embedder]\nkind = linear\ninput_dim = 2\noutput_dim = 2\nweights = weights\nbias = bias\n") == TKM_OK);
     CHECK(tkm_layer_factory_init_linear_embedder(&ini, &params, &linear_embedder) == TKM_ERR);
-    CHECK(tkm_ini_parse(&ini, "[model]\nkind = mlp_window\ninput_dim = 2\nhidden_dim = 2\noutput_dim = 1\nw0 = weights\nb0 = bias\nw1 = weights\nb1 = bias\n") == TKM_OK);
-    CHECK(tkm_layer_factory_init_mlp_window(&ini, &params, &mlp) == TKM_ERR);
-    CHECK(tkm_ini_parse(&ini, "[model]\nkind = action_scorer\nstate_dim = 1\naction_dim = 2\nhidden_dim = 1\nw0 = weights\nb0 = bias\nw1 = weights\nb1 = bias\n") == TKM_OK);
-    CHECK(tkm_layer_factory_init_action_scorer(&ini, &params, &scorer) == TKM_ERR);
 }
 
 int main(void) {
@@ -303,8 +231,6 @@ int main(void) {
     test_factory_constructs_normalized_continuous_from_ini_and_params();
     test_factory_constructs_lookup_embedder_from_ini_and_params();
     test_factory_constructs_linear_embedder_from_ini_and_params();
-    test_factory_constructs_mlp_window_from_ini_and_params();
-    test_factory_constructs_action_scorer_from_ini_and_params();
     test_factory_rejects_missing_required_fields_and_wrong_kinds();
     puts("layer factory tests passed");
     return 0;
