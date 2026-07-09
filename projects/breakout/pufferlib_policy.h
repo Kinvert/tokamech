@@ -117,7 +117,14 @@ typedef struct {
     uint32_t stream_context_count;
     float value_history[BREAKOUT_PUFFERLIB_TOKEN_HISTORY * BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS];
     uint32_t value_history_count;
+    uint8_t action_history[BREAKOUT_PUFFERLIB_TOKEN_HISTORY];
+    uint32_t action_history_count;
+    uint8_t use_obs_mlp;
+    uint8_t predicted_obs_ready;
+    uint32_t predicted_obs_count;
+    float predicted_obs_values[BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS];
     TkmMlpWindow mlp;
+    TkmMlpWindow obs_mlp;
 } BreakoutPufferlibTokenPolicy;
 
 int breakout_pufferlib_token_config_from_ini(

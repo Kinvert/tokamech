@@ -654,6 +654,26 @@ static Color token_viz_continuous_value_color(
     return (Color){r, g, b, 235};
 }
 
+static Color token_viz_action_color(uint8_t action) {
+    if (action == 1u) {
+        return (Color){129, 212, 250, 245};
+    }
+    if (action == 2u) {
+        return (Color){255, 171, 145, 245};
+    }
+    return (Color){189, 189, 189, 230};
+}
+
+static const char* token_viz_action_short_name(uint8_t action) {
+    if (action == 1u) {
+        return "L";
+    }
+    if (action == 2u) {
+        return "R";
+    }
+    return "N";
+}
+
 static void token_viz_draw_continuous_mlp(
     const BreakoutPufferlibTokenPolicy* policy,
     const float* obs,
@@ -695,6 +715,13 @@ static void token_viz_draw_continuous_mlp(
             }
             DrawRectangle(cell_x, row_y + 3, 11, 11, token_viz_continuous_value_color(policy, dim, value));
         }
+        if (slot >= pad_count && (slot - pad_count) < policy->action_history_count) {
+            uint8_t action = policy->action_history[slot - pad_count];
+            DrawRectangle(x + 274, row_y + 3, 24, 11, token_viz_action_color(action));
+            DrawText(token_viz_action_short_name(action), x + 283, row_y + 4, 9, BLACK);
+        } else {
+            DrawRectangle(x + 274, row_y + 3, 24, 11, (Color){64, 72, 78, 180});
+        }
     }
 
     DrawText("CURRENT OBS", x + 12, current_y - 14, 12, (Color){255, 245, 157, 255});
@@ -704,8 +731,14 @@ static void token_viz_draw_continuous_mlp(
         float value = dim < TKM_PUFFERLIB_BREAKOUT_OBS_DIM ? obs[dim] : 0.0f;
         DrawRectangle(cell_x, current_y, 11, 15, token_viz_continuous_value_color(policy, dim, value));
     }
-    DrawText("selected dims: 0..15", x + 12, current_y + 22, 10, (Color){176, 224, 230, 255});
-    DrawText("MLP: 144 -> 64 -> 3 actions", x + 12, current_y + 38, 10, (Color){176, 224, 230, 255});
+    DrawRectangle(x + 274, current_y, 24, 15, (Color){64, 72, 78, 210});
+    DrawText("?", x + 283, current_y + 3, 10, (Color){220, 230, 230, 255});
+    DrawText("token = obs cells + action cell", x + 12, current_y + 22, 10, (Color){176, 224, 230, 255});
+    DrawText("action head unchanged; obs head is render auxiliary",
+        x + 12,
+        current_y + 38,
+        10,
+        (Color){176, 224, 230, 255});
 
     token_viz_fill_continuous_mlp_actions(policy, obs, candidates);
     best_score = candidates[0].score;
@@ -716,18 +749,27 @@ static void token_viz_draw_continuous_mlp(
     DrawRectangleLinesEx((Rectangle){(float)(x + 12), (float)pred_y, (float)(w - 24), 58.0f},
         3.0f,
         (Color){255, 213, 79, 255});
-    DrawText("PREDICTED ACTION", x + 24, pred_y + 8, 12, (Color){255, 245, 157, 255});
-    DrawText(token_viz_action_name((uint8_t)candidates[0].token_class), x + 24, pred_y + 27, 18, WHITE);
-
-    for (uint32_t i = 0u; i < 3u; i++) {
-        int bar_y = pred_y + 68 + (int)i * 15;
-        int bar_w = (int)(120.0f * (candidates[i].score / best_score));
-        if (bar_w < 2) {
-            bar_w = 2;
-        }
-        DrawText(token_viz_action_name((uint8_t)candidates[i].token_class), x + 16, bar_y, 10, WHITE);
-        DrawRectangle(x + 72, bar_y + 2, bar_w, 8, (Color){255, 171, 64, 235});
+    DrawText("PREDICTED NEXT TOKEN", x + 24, pred_y + 8, 12, (Color){255, 245, 157, 255});
+    for (uint32_t i = 0u; i < policy->selected_dim_count && i < 16u; i++) {
+        uint32_t dim = policy->selected_dims[i];
+        int cell_x = x + 48 + (int)i * 14;
+        float value = policy->predicted_obs_ready && i < policy->predicted_obs_count ?
+            policy->predicted_obs_values[i] : 0.0f;
+        DrawRectangle(cell_x, pred_y + 29, 11, 15, token_viz_continuous_value_color(policy, dim, value));
     }
+    DrawRectangle(x + 274, pred_y + 29, 24, 15, token_viz_action_color((uint8_t)candidates[0].token_class));
+    DrawText(token_viz_action_short_name((uint8_t)candidates[0].token_class),
+        x + 283,
+        pred_y + 32,
+        10,
+        BLACK);
+    DrawText(TextFormat("action=%s score=%.2f",
+            token_viz_action_name((uint8_t)candidates[0].token_class),
+            best_score),
+        x + 24,
+        pred_y + 45,
+        10,
+        (Color){255, 245, 157, 255});
 }
 
 static void token_viz_draw_context_grid(

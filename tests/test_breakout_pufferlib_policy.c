@@ -565,6 +565,13 @@ static void test_breakout_continuous_mlp_first_dims_predicts_actions(void) {
     CHECK(breakout_pufferlib_token_policy_reset(&policy) == TKM_OK);
     CHECK(breakout_pufferlib_token_policy_predict(&policy, obs, &action) == TKM_OK);
     CHECK(action == 2u);
+    CHECK(policy.predicted_obs_ready == 1u);
+    CHECK(policy.predicted_obs_count == config.selected_dim_count);
+    for (uint32_t i = 0u; i < policy.predicted_obs_count; i++) {
+        uint32_t dim = policy.selected_dims[i];
+        CHECK(policy.predicted_obs_values[i] >= policy.obs_min[dim] - 0.001f);
+        CHECK(policy.predicted_obs_values[i] <= policy.obs_max[dim] + 0.001f);
+    }
 
     obs[0] = 0.875f;
     obs[1] = 0.125f;
@@ -573,6 +580,8 @@ static void test_breakout_continuous_mlp_first_dims_predicts_actions(void) {
     CHECK(breakout_pufferlib_token_policy_reset(&policy) == TKM_OK);
     CHECK(breakout_pufferlib_token_policy_predict(&policy, obs, &action) == TKM_OK);
     CHECK(action == 1u);
+    CHECK(policy.predicted_obs_ready == 1u);
+    CHECK(policy.predicted_obs_count == config.selected_dim_count);
 }
 
 typedef enum {

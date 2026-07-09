@@ -417,6 +417,65 @@ static int breakout_token_mlp_init(BreakoutPufferlibTokenPolicy* policy) {
     return TKM_OK;
 }
 
+static int breakout_continuous_obs_mlp_init(BreakoutPufferlibTokenPolicy* policy) {
+    float w0[TKM_MLP_WINDOW_MAX_INPUT * TKM_MLP_WINDOW_MAX_HIDDEN];
+    float b0[TKM_MLP_WINDOW_MAX_HIDDEN];
+    float w1[TKM_MLP_WINDOW_MAX_HIDDEN * TKM_MLP_WINDOW_MAX_OUTPUT];
+    float b1[TKM_MLP_WINDOW_MAX_OUTPUT];
+    uint32_t input_dim;
+    uint32_t output_dim;
+    uint32_t hidden_dim;
+
+    if (!policy || policy->model_kind != BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW) {
+        return TKM_ERR;
+    }
+    input_dim = breakout_token_mlp_input_dim(policy);
+    output_dim = policy->selected_dim_count;
+    hidden_dim = policy->token_mlp_hidden_dim;
+    if (input_dim == 0u ||
+        input_dim > TKM_MLP_WINDOW_MAX_INPUT ||
+        output_dim == 0u ||
+        output_dim > TKM_MLP_WINDOW_MAX_OUTPUT ||
+        hidden_dim == 0u ||
+        hidden_dim > TKM_MLP_WINDOW_MAX_HIDDEN) {
+        return TKM_ERR;
+    }
+
+    for (uint32_t i = 0u; i < input_dim; i++) {
+        for (uint32_t h = 0u; h < hidden_dim; h++) {
+            int pattern = (int)(((i + 13u) * (h + 3u)) % 19u) - 9;
+            w0[i * hidden_dim + h] = 0.004f * (float)pattern;
+        }
+    }
+    for (uint32_t h = 0u; h < hidden_dim; h++) {
+        b0[h] = 0.01f;
+        for (uint32_t output = 0u; output < output_dim; output++) {
+            int pattern = (int)(((h + 7u) * (output + 17u)) % 17u) - 8;
+            w1[h * output_dim + output] = 0.004f * (float)pattern;
+        }
+    }
+    for (uint32_t output = 0u; output < output_dim; output++) {
+        b1[output] = 0.0f;
+    }
+
+    if (tkm_mlp_window_init(
+            &policy->obs_mlp,
+            input_dim,
+            hidden_dim,
+            output_dim,
+            w0,
+            b0,
+            w1,
+            b1) != TKM_OK) {
+        return TKM_ERR;
+    }
+    policy->use_obs_mlp = 1u;
+    policy->predicted_obs_ready = 0u;
+    policy->predicted_obs_count = output_dim;
+    memset(policy->predicted_obs_values, 0, sizeof(policy->predicted_obs_values));
+    return TKM_OK;
+}
+
 static uint32_t breakout_token_stream_code(uint8_t type, uint16_t token) {
     return ((uint32_t)type << 16u) | (uint32_t)token;
 }
@@ -464,6 +523,11 @@ static void breakout_continuous_history_reset(BreakoutPufferlibTokenPolicy* poli
     }
     memset(policy->value_history, 0, sizeof(policy->value_history));
     policy->value_history_count = 0u;
+    memset(policy->action_history, 0, sizeof(policy->action_history));
+    policy->action_history_count = 0u;
+    memset(policy->predicted_obs_values, 0, sizeof(policy->predicted_obs_values));
+    policy->predicted_obs_ready = 0u;
+    policy->predicted_obs_count = policy->selected_dim_count;
 }
 
 static int breakout_continuous_copy_selected_values(
@@ -509,6 +573,26 @@ static void breakout_continuous_history_push(
     memcpy(&history[(history_limit - 1u) * stride], values, selected_dim_count * sizeof(float));
 }
 
+static void breakout_action_history_push(
+    uint8_t* history,
+    uint32_t* history_count,
+    uint32_t history_limit,
+    uint8_t action
+) {
+    if (!history || !history_count || history_limit == 0u) {
+        return;
+    }
+    if (*history_count < history_limit) {
+        history[*history_count] = action;
+        (*history_count)++;
+        return;
+    }
+    for (uint32_t slot = 1u; slot < history_limit; slot++) {
+        history[slot - 1u] = history[slot];
+    }
+    history[history_limit - 1u] = action;
+}
+
 static int breakout_continuous_mlp_build_input_from_history(
     const BreakoutPufferlibTokenPolicy* policy,
     const float* history,
@@ -547,6 +631,129 @@ static int breakout_continuous_mlp_build_input_from_history(
         input[input_index++] = current[i];
     }
     return input_index == input_dim ? TKM_OK : TKM_ERR;
+}
+
+static float breakout_clamp_selected_obs_value(
+    const BreakoutPufferlibTokenPolicy* policy,
+    uint32_t selected_index,
+    float value
+) {
+    uint32_t dim;
+    float min_value;
+    float max_value;
+
+    if (!policy || selected_index >= policy->selected_dim_count) {
+        return value;
+    }
+    dim = policy->selected_dims[selected_index];
+    if (dim >= TKM_PUFFERLIB_BREAKOUT_OBS_DIM) {
+        return value;
+    }
+    min_value = policy->obs_min[dim];
+    max_value = policy->obs_max[dim];
+    if (value < min_value) {
+        return min_value;
+    }
+    if (value > max_value) {
+        return max_value;
+    }
+    return value;
+}
+
+static int breakout_continuous_obs_mlp_train_regression(
+    TkmMlpWindow* mlp,
+    const float* input,
+    const float* target,
+    uint32_t target_count,
+    float learning_rate
+) {
+    float pre_hidden[TKM_MLP_WINDOW_MAX_HIDDEN];
+    float hidden[TKM_MLP_WINDOW_MAX_HIDDEN];
+    float grad_output[TKM_MLP_WINDOW_MAX_OUTPUT];
+    float old_w1[TKM_MLP_WINDOW_MAX_HIDDEN * TKM_MLP_WINDOW_MAX_OUTPUT];
+    float grad_hidden[TKM_MLP_WINDOW_MAX_HIDDEN];
+
+    if (!mlp || !input || !target ||
+        mlp->input_dim == 0u ||
+        mlp->hidden_dim == 0u ||
+        mlp->output_dim == 0u ||
+        target_count != mlp->output_dim ||
+        learning_rate <= 0.0f) {
+        return TKM_ERR;
+    }
+
+    for (uint32_t h = 0u; h < mlp->hidden_dim; h++) {
+        float value = mlp->b0[h];
+        for (uint32_t i = 0u; i < mlp->input_dim; i++) {
+            value += input[i] * mlp->w0[i * mlp->hidden_dim + h];
+        }
+        pre_hidden[h] = value;
+        hidden[h] = value > 0.0f ? value : 0.0f;
+    }
+
+    for (uint32_t h = 0u; h < mlp->hidden_dim; h++) {
+        for (uint32_t output = 0u; output < mlp->output_dim; output++) {
+            old_w1[h * mlp->output_dim + output] = mlp->w1[h * mlp->output_dim + output];
+        }
+    }
+
+    for (uint32_t output = 0u; output < mlp->output_dim; output++) {
+        float value = mlp->b1[output];
+        for (uint32_t h = 0u; h < mlp->hidden_dim; h++) {
+            value += hidden[h] * old_w1[h * mlp->output_dim + output];
+        }
+        grad_output[output] = value - target[output];
+    }
+
+    for (uint32_t h = 0u; h < mlp->hidden_dim; h++) {
+        float grad = 0.0f;
+        for (uint32_t output = 0u; output < mlp->output_dim; output++) {
+            grad += grad_output[output] * old_w1[h * mlp->output_dim + output];
+            mlp->w1[h * mlp->output_dim + output] -=
+                learning_rate * grad_output[output] * hidden[h];
+        }
+        grad_hidden[h] = pre_hidden[h] > 0.0f ? grad : 0.0f;
+        mlp->b0[h] -= learning_rate * grad_hidden[h];
+    }
+
+    for (uint32_t output = 0u; output < mlp->output_dim; output++) {
+        mlp->b1[output] -= learning_rate * grad_output[output];
+    }
+
+    for (uint32_t i = 0u; i < mlp->input_dim; i++) {
+        for (uint32_t h = 0u; h < mlp->hidden_dim; h++) {
+            mlp->w0[i * mlp->hidden_dim + h] -= learning_rate * grad_hidden[h] * input[i];
+        }
+    }
+    return TKM_OK;
+}
+
+static int breakout_continuous_mlp_predict_obs_from_history(
+    BreakoutPufferlibTokenPolicy* policy,
+    const float* history,
+    uint32_t history_count,
+    const float* obs
+) {
+    float input[TKM_MLP_WINDOW_MAX_INPUT];
+    float output[TKM_MLP_WINDOW_MAX_OUTPUT];
+
+    if (!policy || !history || !obs || !policy->use_obs_mlp ||
+        breakout_continuous_mlp_build_input_from_history(
+            policy,
+            history,
+            history_count,
+            obs,
+            input,
+            TKM_MLP_WINDOW_MAX_INPUT) != TKM_OK ||
+        tkm_mlp_window_forward(&policy->obs_mlp, input, output, TKM_MLP_WINDOW_MAX_OUTPUT) != TKM_OK) {
+        return TKM_ERR;
+    }
+    policy->predicted_obs_count = policy->selected_dim_count;
+    for (uint32_t i = 0u; i < policy->selected_dim_count; i++) {
+        policy->predicted_obs_values[i] = breakout_clamp_selected_obs_value(policy, i, output[i]);
+    }
+    policy->predicted_obs_ready = 1u;
+    return TKM_OK;
 }
 
 static int breakout_continuous_mlp_predict_action_from_history(
@@ -1272,9 +1479,20 @@ static int breakout_continuous_mlp_pass(
         float selected_values[BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS];
         uint8_t heldout = breakout_is_heldout(row_index, config->heldout_stride) ? 1u : 0u;
         uint32_t row_episode;
+        const TkmFloatTransition* next_row = NULL;
+        uint8_t has_next_obs_target = 0u;
 
         if (!breakout_transition_row_ready(row)) {
             return TKM_ERR;
+        }
+        if (row_index + 1u < dataset->row_count && !row->terminal) {
+            const TkmFloatTransition* candidate = &dataset->rows[row_index + 1u];
+            if (breakout_transition_row_ready(candidate) &&
+                candidate->env_index == row->env_index &&
+                candidate->episode == row->episode) {
+                next_row = candidate;
+                has_next_obs_target = 1u;
+            }
         }
         row_episode = row->episode < 0 ? 0u : (uint32_t)row->episode;
         if (row_index == 0u || row_episode != last_episode || row->t == 0) {
@@ -1298,6 +1516,19 @@ static int breakout_continuous_mlp_pass(
                     (uint16_t)row->action,
                     config->learning_rate) != TKM_OK) {
                 return TKM_ERR;
+            }
+            if (has_next_obs_target) {
+                float target_values[BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS];
+
+                if (breakout_continuous_copy_selected_values(policy, next_row->obs, target_values) != TKM_OK ||
+                    breakout_continuous_obs_mlp_train_regression(
+                        &policy->obs_mlp,
+                        input,
+                        target_values,
+                        policy->selected_dim_count,
+                        config->learning_rate) != TKM_OK) {
+                    return TKM_ERR;
+                }
             }
             train_rows++;
         } else if (heldout) {
@@ -1652,7 +1883,8 @@ int breakout_pufferlib_token_policy_train(
         uint32_t action_correct = 0u;
         uint32_t action_total = 0u;
 
-        if (breakout_token_mlp_init(policy) != TKM_OK) {
+        if (breakout_token_mlp_init(policy) != TKM_OK ||
+            breakout_continuous_obs_mlp_init(policy) != TKM_OK) {
             return TKM_ERR;
         }
         for (uint32_t epoch = 0u; epoch < config->epochs; epoch++) {
@@ -1863,6 +2095,11 @@ int breakout_pufferlib_token_policy_predict(
                 policy->value_history_count,
                 obs,
                 out_action) != TKM_OK ||
+            breakout_continuous_mlp_predict_obs_from_history(
+                policy,
+                policy->value_history,
+                policy->value_history_count,
+                obs) != TKM_OK ||
             breakout_continuous_copy_selected_values(policy, obs, selected_values) != TKM_OK) {
             return TKM_ERR;
         }
@@ -1872,6 +2109,11 @@ int breakout_pufferlib_token_policy_predict(
             policy->history,
             policy->selected_dim_count,
             selected_values);
+        breakout_action_history_push(
+            policy->action_history,
+            &policy->action_history_count,
+            policy->history,
+            *out_action);
         return TKM_OK;
     }
     if (breakout_token_make_selected_tokens(policy, obs, current_obs_tokens) != TKM_OK) {
