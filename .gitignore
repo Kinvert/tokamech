@@ -1,6 +1,11 @@
 build/
 runs/
 
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
 *.o
 *.a
 *.so
