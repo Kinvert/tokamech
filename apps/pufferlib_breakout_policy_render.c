@@ -619,12 +619,29 @@ static void token_viz_fill_continuous_mlp_actions(
     }
 }
 
-static Color token_viz_continuous_value_color(float value) {
-    float pct = (value + 1.0f) * 0.5f;
+static Color token_viz_continuous_value_color(
+    const BreakoutPufferlibTokenPolicy* policy,
+    uint32_t dim,
+    float value
+) {
+    float min_value;
+    float max_value;
+    float span;
+    float pct;
     unsigned char r;
     unsigned char g;
     unsigned char b;
 
+    if (!policy || dim >= TKM_PUFFERLIB_BREAKOUT_OBS_DIM) {
+        return (Color){80, 90, 96, 190};
+    }
+    min_value = policy->obs_min[dim];
+    max_value = policy->obs_max[dim];
+    span = max_value - min_value;
+    if (span < 0.000001f) {
+        return (Color){72, 82, 88, 185};
+    }
+    pct = (value - min_value) / span;
     if (pct < 0.0f) {
         pct = 0.0f;
     }
@@ -669,13 +686,14 @@ static void token_viz_draw_continuous_mlp(
 
         DrawText(TextFormat("t-%d", age), x + 12, row_y + 4, 10, (Color){190, 210, 215, 255});
         for (uint32_t i = 0u; i < policy->selected_dim_count && i < 16u; i++) {
+            uint32_t dim = policy->selected_dims[i];
             float value = 0.0f;
             int cell_x = x + 48 + (int)i * 14;
             if (slot >= pad_count) {
                 value = policy->value_history[
                     (slot - pad_count) * BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS + i];
             }
-            DrawRectangle(cell_x, row_y + 3, 11, 11, token_viz_continuous_value_color(value));
+            DrawRectangle(cell_x, row_y + 3, 11, 11, token_viz_continuous_value_color(policy, dim, value));
         }
     }
 
@@ -684,7 +702,7 @@ static void token_viz_draw_continuous_mlp(
         uint32_t dim = policy->selected_dims[i];
         int cell_x = x + 48 + (int)i * 14;
         float value = dim < TKM_PUFFERLIB_BREAKOUT_OBS_DIM ? obs[dim] : 0.0f;
-        DrawRectangle(cell_x, current_y, 11, 15, token_viz_continuous_value_color(value));
+        DrawRectangle(cell_x, current_y, 11, 15, token_viz_continuous_value_color(policy, dim, value));
     }
     DrawText("selected dims: 0..15", x + 12, current_y + 22, 10, (Color){176, 224, 230, 255});
     DrawText("MLP: 144 -> 64 -> 3 actions", x + 12, current_y + 38, 10, (Color){176, 224, 230, 255});
