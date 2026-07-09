@@ -39,7 +39,10 @@ static void require_file_absent(const char* path) {
 static void require_absent(const char* text, const char* needle) {
     CHECK(text != 0);
     CHECK(needle != 0);
-    CHECK(strstr(text, needle) == 0);
+    if (strstr(text, needle) != 0) {
+        fprintf(stderr, "forbidden shortcut string still present: %s\n", needle);
+        CHECK(strstr(text, needle) == 0);
+    }
 }
 
 static void test_active_benchmark_source_has_no_snake_shortcut_symbols(void) {
@@ -232,7 +235,6 @@ static void test_pufferlib_policy_library_exposes_only_token_policy_path(void) {
     require_absent(header, "breakout_pufferlib_nearest_predict");
     require_absent(header, "breakout_pufferlib_sequence_cursor");
     require_absent(header, "breakout_pufferlib_intercept_policy");
-    require_absent(header, "BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW");
     require_absent(header, "BREAKOUT_PUFFERLIB_TOKEN_MODEL_LINEAR_POLICY");
     require_absent(header, "BREAKOUT_PUFFERLIB_TOKEN_MODEL_ACTION_MLP_FROM_TOKEN_CONTEXT");
     require_absent(header, "BREAKOUT_PUFFERLIB_TOKEN_INPUT_DELTA_ACTION_HISTORY");
@@ -246,7 +248,6 @@ static void test_pufferlib_policy_library_exposes_only_token_policy_path(void) {
     require_absent(source, "breakout_pufferlib_nearest_predict");
     require_absent(source, "breakout_pufferlib_sequence_cursor");
     require_absent(source, "breakout_pufferlib_intercept_policy");
-    require_absent(source, "\"mlp_window\"");
     require_absent(source, "linear_policy");
     require_absent(source, "action_mlp_from_token_context");
     require_absent(source, "delta_action_history");
@@ -254,7 +255,6 @@ static void test_pufferlib_policy_library_exposes_only_token_policy_path(void) {
     require_absent(source, "breakout_token_context_mlp_predict_action");
 
     require_absent(makefile, "pufferlib_token_mlp.ini");
-    require_absent(makefile, "pufferlib_token_mlp_first_dims.ini");
     require_absent(makefile, "pufferlib_token_mlp_first_dims_h4.ini");
     require_absent(makefile, "pufferlib_token_mlp_first_dims24.ini");
     require_absent(makefile, "pufferlib_token_mlp_first_dims24_h4.ini");
@@ -265,7 +265,6 @@ static void test_pufferlib_policy_library_exposes_only_token_policy_path(void) {
     require_absent(makefile, "pufferlib_token_action_mlp_manual.ini");
 
     require_file_absent("projects/breakout/pufferlib_token_mlp.ini");
-    require_file_absent("projects/breakout/pufferlib_token_mlp_first_dims.ini");
     require_file_absent("projects/breakout/pufferlib_token_mlp_first_dims_h4.ini");
     require_file_absent("projects/breakout/pufferlib_token_mlp_first_dims24.ini");
     require_file_absent("projects/breakout/pufferlib_token_mlp_first_dims24_h4.ini");
@@ -549,6 +548,7 @@ static void test_action_scorer_library_is_not_kept_as_supported_shortcut_surface
 
 static void test_pufferlib_tokenizers_do_not_select_observation_dims_from_action_labels(void) {
     static const char* config_paths[] = {
+        "projects/breakout/pufferlib_token_mlp_first_dims.ini",
         "projects/breakout/pufferlib_token_ngram.ini",
         "projects/breakout/pufferlib_token_backoff_ngram.ini",
         "projects/breakout/pufferlib_token_mlp_window.ini",

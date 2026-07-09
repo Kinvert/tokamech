@@ -40,6 +40,7 @@ PUFFERLIB_BREAKOUT_BENCHMARK_BIN := build/pufferlib_breakout_benchmark
 PUFFERLIB_DIR ?= /home/claude/pathfinder
 
 PUFFERLIB_BREAKOUT_MATRIX_CONFIGS := \
+	projects/breakout/pufferlib_token_mlp_first_dims.ini \
 	projects/breakout/pufferlib_token_ngram.ini \
 	projects/breakout/pufferlib_token_backoff_ngram.ini \
 	projects/breakout/pufferlib_token_mlp_window.ini \

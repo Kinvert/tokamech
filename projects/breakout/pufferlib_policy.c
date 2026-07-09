@@ -25,6 +25,9 @@ static int breakout_copy_name(char* dst, uint32_t dst_count, const char* src) {
 }
 
 static const char* breakout_token_model_name(BreakoutPufferlibTokenModelKind kind) {
+    if (kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW) {
+        return "mlp_window";
+    }
     if (kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_MLP_WINDOW) {
         return "token_mlp_window";
     }
@@ -43,12 +46,16 @@ static const char* breakout_token_head_name(BreakoutPufferlibTokenHeadKind kind)
 }
 
 static const char* breakout_token_layout_name(BreakoutPufferlibTokenModelKind kind) {
-    (void)kind;
+    if (kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW) {
+        return "obs_action_interleaved";
+    }
     return "autoregressive_obs_action";
 }
 
 static const char* breakout_token_observation_tokenizer_name(BreakoutPufferlibTokenModelKind kind) {
-    (void)kind;
+    if (kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW) {
+        return "selected_continuous";
+    }
     return "selected_quantized";
 }
 
@@ -63,7 +70,9 @@ static const char* breakout_token_selection_name(BreakoutPufferlibTokenObservati
 }
 
 static const char* breakout_token_input_feature_name(BreakoutPufferlibTokenInputFeatureKind kind) {
-    (void)kind;
+    if (kind == BREAKOUT_PUFFERLIB_TOKEN_INPUT_VALUE_WINDOW) {
+        return "value_window";
+    }
     return "token_stream";
 }
 
@@ -81,12 +90,24 @@ static int breakout_token_model_uses_token_stream(BreakoutPufferlibTokenModelKin
     return breakout_token_model_predicts_next_token(kind);
 }
 
+static int breakout_token_model_predicts_action(BreakoutPufferlibTokenModelKind kind) {
+    return kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW;
+}
+
+static int breakout_token_model_uses_value_window(BreakoutPufferlibTokenModelKind kind) {
+    return breakout_token_model_predicts_action(kind);
+}
+
 static int breakout_token_model_kind_from_string(
     const char* text,
     BreakoutPufferlibTokenModelKind* out
 ) {
     if (!text || !out) {
         return TKM_ERR;
+    }
+    if (strcmp(text, "mlp_window") == 0) {
+        *out = BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW;
+        return TKM_OK;
     }
     if (strcmp(text, "token_ngram") == 0) {
         *out = BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM;
@@ -144,6 +165,56 @@ static int breakout_token_input_feature_kind_from_string(
     }
     if (strcmp(text, "token_stream") == 0) {
         *out = BREAKOUT_PUFFERLIB_TOKEN_INPUT_TOKEN_STREAM;
+        return TKM_OK;
+    }
+    if (strcmp(text, "value_window") == 0) {
+        *out = BREAKOUT_PUFFERLIB_TOKEN_INPUT_VALUE_WINDOW;
+        return TKM_OK;
+    }
+    return TKM_ERR;
+}
+
+int breakout_pufferlib_render_visualization_kind_from_string(
+    const char* text,
+    BreakoutPufferlibRenderVisualizationKind* out
+) {
+    if (!text || !out) {
+        return TKM_ERR;
+    }
+    if (strcmp(text, "none") == 0) {
+        *out = BREAKOUT_PUFFERLIB_RENDER_VIS_NONE;
+        return TKM_OK;
+    }
+    if (strcmp(text, "topk") == 0) {
+        *out = BREAKOUT_PUFFERLIB_RENDER_VIS_TOPK;
+        return TKM_OK;
+    }
+    if (strcmp(text, "token_stream") == 0) {
+        *out = BREAKOUT_PUFFERLIB_RENDER_VIS_TOKEN_STREAM;
+        return TKM_OK;
+    }
+    if (strcmp(text, "context_grid") == 0) {
+        *out = BREAKOUT_PUFFERLIB_RENDER_VIS_CONTEXT_GRID;
+        return TKM_OK;
+    }
+    if (strcmp(text, "quantization") == 0) {
+        *out = BREAKOUT_PUFFERLIB_RENDER_VIS_QUANTIZATION;
+        return TKM_OK;
+    }
+    if (strcmp(text, "pipeline") == 0) {
+        *out = BREAKOUT_PUFFERLIB_RENDER_VIS_PIPELINE;
+        return TKM_OK;
+    }
+    if (strcmp(text, "transformer") == 0) {
+        *out = BREAKOUT_PUFFERLIB_RENDER_VIS_TRANSFORMER;
+        return TKM_OK;
+    }
+    if (strcmp(text, "continuous_mlp") == 0) {
+        *out = BREAKOUT_PUFFERLIB_RENDER_VIS_CONTINUOUS_MLP;
+        return TKM_OK;
+    }
+    if (strcmp(text, "all") == 0) {
+        *out = BREAKOUT_PUFFERLIB_RENDER_VIS_ALL;
         return TKM_OK;
     }
     return TKM_ERR;
@@ -250,6 +321,9 @@ static uint32_t breakout_token_mlp_input_dim(const BreakoutPufferlibTokenPolicy*
     if (policy->model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_MLP_WINDOW) {
         return policy->history * 2u;
     }
+    if (policy->model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW) {
+        return (policy->history + 1u) * policy->selected_dim_count;
+    }
     return 0u;
 }
 
@@ -258,6 +332,9 @@ static uint32_t breakout_token_mlp_output_dim(const BreakoutPufferlibTokenPolicy
 
     if (!policy) {
         return 0u;
+    }
+    if (policy->model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW) {
+        return TKM_PUFFERLIB_BREAKOUT_ACTION_COUNT;
     }
     obs_vocab = policy->selected_dim_count * policy->bin_count;
     return TKM_PUFFERLIB_BREAKOUT_ACTION_COUNT + obs_vocab;
@@ -378,6 +455,129 @@ static void breakout_token_stream_context_push(
         context[i - 1u] = context[i];
     }
     context[history - 1u] = code;
+}
+
+
+static void breakout_continuous_history_reset(BreakoutPufferlibTokenPolicy* policy) {
+    if (!policy) {
+        return;
+    }
+    memset(policy->value_history, 0, sizeof(policy->value_history));
+    policy->value_history_count = 0u;
+}
+
+static int breakout_continuous_copy_selected_values(
+    const BreakoutPufferlibTokenPolicy* policy,
+    const float* obs,
+    float* out_values
+) {
+    if (!policy || !obs || !out_values ||
+        policy->selected_dim_count == 0u ||
+        policy->selected_dim_count > BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS) {
+        return TKM_ERR;
+    }
+    for (uint32_t i = 0u; i < policy->selected_dim_count; i++) {
+        uint32_t dim = policy->selected_dims[i];
+        if (dim >= TKM_PUFFERLIB_BREAKOUT_OBS_DIM) {
+            return TKM_ERR;
+        }
+        out_values[i] = obs[dim];
+    }
+    return TKM_OK;
+}
+
+static void breakout_continuous_history_push(
+    float* history,
+    uint32_t* history_count,
+    uint32_t history_limit,
+    uint32_t selected_dim_count,
+    const float* values
+) {
+    uint32_t stride = BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS;
+
+    if (!history || !history_count || !values || history_limit == 0u || selected_dim_count == 0u) {
+        return;
+    }
+    if (*history_count < history_limit) {
+        memcpy(&history[*history_count * stride], values, selected_dim_count * sizeof(float));
+        (*history_count)++;
+        return;
+    }
+    for (uint32_t slot = 1u; slot < history_limit; slot++) {
+        memcpy(&history[(slot - 1u) * stride], &history[slot * stride], selected_dim_count * sizeof(float));
+    }
+    memcpy(&history[(history_limit - 1u) * stride], values, selected_dim_count * sizeof(float));
+}
+
+static int breakout_continuous_mlp_build_input_from_history(
+    const BreakoutPufferlibTokenPolicy* policy,
+    const float* history,
+    uint32_t history_count,
+    const float* obs,
+    float* input,
+    uint32_t input_capacity
+) {
+    uint32_t input_dim = breakout_token_mlp_input_dim(policy);
+    uint32_t stride = BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS;
+    uint32_t selected_dim_count;
+    uint32_t pad_count;
+    uint32_t input_index = 0u;
+    float current[BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS];
+
+    if (!policy || !history || !obs || !input || input_dim == 0u || input_capacity < input_dim) {
+        return TKM_ERR;
+    }
+    selected_dim_count = policy->selected_dim_count;
+    if (selected_dim_count == 0u || selected_dim_count > BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS) {
+        return TKM_ERR;
+    }
+    if (history_count > policy->history) {
+        history_count = policy->history;
+    }
+    pad_count = policy->history - history_count;
+    for (uint32_t slot = 0u; slot < policy->history; slot++) {
+        for (uint32_t i = 0u; i < selected_dim_count; i++) {
+            input[input_index++] = slot < pad_count ? 0.0f : history[(slot - pad_count) * stride + i];
+        }
+    }
+    if (breakout_continuous_copy_selected_values(policy, obs, current) != TKM_OK) {
+        return TKM_ERR;
+    }
+    for (uint32_t i = 0u; i < selected_dim_count; i++) {
+        input[input_index++] = current[i];
+    }
+    return input_index == input_dim ? TKM_OK : TKM_ERR;
+}
+
+static int breakout_continuous_mlp_predict_action_from_history(
+    BreakoutPufferlibTokenPolicy* policy,
+    const float* history,
+    uint32_t history_count,
+    const float* obs,
+    uint8_t* out_action
+) {
+    float input[TKM_MLP_WINDOW_MAX_INPUT];
+    float logits[TKM_MLP_WINDOW_MAX_OUTPUT];
+    uint32_t best = 0u;
+
+    if (!policy || !obs || !out_action || !policy->use_mlp ||
+        breakout_continuous_mlp_build_input_from_history(
+            policy,
+            history,
+            history_count,
+            obs,
+            input,
+            TKM_MLP_WINDOW_MAX_INPUT) != TKM_OK ||
+        tkm_mlp_window_forward(&policy->mlp, input, logits, TKM_MLP_WINDOW_MAX_OUTPUT) != TKM_OK) {
+        return TKM_ERR;
+    }
+    for (uint32_t action = 1u; action < TKM_PUFFERLIB_BREAKOUT_ACTION_COUNT; action++) {
+        if (logits[action] > logits[best]) {
+            best = action;
+        }
+    }
+    *out_action = (uint8_t)best;
+    return TKM_OK;
 }
 
 static uint32_t breakout_token_ngram_context_key(
@@ -1043,6 +1243,111 @@ static int breakout_token_mlp_pass(
     return TKM_OK;
 }
 
+
+static int breakout_continuous_mlp_pass(
+    BreakoutPufferlibTokenPolicy* policy,
+    const TkmFloatTransitionDataset* dataset,
+    const BreakoutPufferlibTokenConfig* config,
+    uint8_t train,
+    uint32_t* out_train_rows,
+    uint32_t* out_heldout_rows,
+    uint32_t* out_action_correct,
+    uint32_t* out_action_total
+) {
+    float history[BREAKOUT_PUFFERLIB_TOKEN_HISTORY * BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS];
+    uint32_t history_count = 0u;
+    uint32_t train_rows = 0u;
+    uint32_t heldout_rows = 0u;
+    uint32_t action_correct = 0u;
+    uint32_t action_total = 0u;
+    uint32_t last_episode = 0xffffffffu;
+
+    if (!policy || !breakout_dataset_ready(dataset) || !config) {
+        return TKM_ERR;
+    }
+    memset(history, 0, sizeof(history));
+    for (uint32_t row_index = 0u; row_index < dataset->row_count; row_index++) {
+        const TkmFloatTransition* row = &dataset->rows[row_index];
+        float input[TKM_MLP_WINDOW_MAX_INPUT];
+        float selected_values[BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS];
+        uint8_t heldout = breakout_is_heldout(row_index, config->heldout_stride) ? 1u : 0u;
+        uint32_t row_episode;
+
+        if (!breakout_transition_row_ready(row)) {
+            return TKM_ERR;
+        }
+        row_episode = row->episode < 0 ? 0u : (uint32_t)row->episode;
+        if (row_index == 0u || row_episode != last_episode || row->t == 0) {
+            memset(history, 0, sizeof(history));
+            history_count = 0u;
+            last_episode = row_episode;
+        }
+        if (train && heldout) {
+            heldout_rows++;
+        } else if (train) {
+            if (breakout_continuous_mlp_build_input_from_history(
+                    policy,
+                    history,
+                    history_count,
+                    row->obs,
+                    input,
+                    TKM_MLP_WINDOW_MAX_INPUT) != TKM_OK ||
+                tkm_mlp_window_train_cross_entropy(
+                    &policy->mlp,
+                    input,
+                    (uint16_t)row->action,
+                    config->learning_rate) != TKM_OK) {
+                return TKM_ERR;
+            }
+            train_rows++;
+        } else if (heldout) {
+            uint8_t predicted = 0u;
+
+            if (breakout_continuous_mlp_predict_action_from_history(
+                    policy,
+                    history,
+                    history_count,
+                    row->obs,
+                    &predicted) != TKM_OK) {
+                return TKM_ERR;
+            }
+            if (predicted == row->action) {
+                action_correct++;
+            }
+            action_total++;
+            heldout_rows++;
+        } else {
+            train_rows++;
+        }
+        if (breakout_continuous_copy_selected_values(policy, row->obs, selected_values) != TKM_OK) {
+            return TKM_ERR;
+        }
+        breakout_continuous_history_push(
+            history,
+            &history_count,
+            policy->history,
+            policy->selected_dim_count,
+            selected_values);
+        if (row->terminal) {
+            memset(history, 0, sizeof(history));
+            history_count = 0u;
+        }
+    }
+    if (out_train_rows) {
+        *out_train_rows = train_rows;
+    }
+    if (out_heldout_rows) {
+        *out_heldout_rows = heldout_rows;
+    }
+    if (out_action_correct) {
+        *out_action_correct = action_correct;
+    }
+    if (out_action_total) {
+        *out_action_total = action_total;
+    }
+    return TKM_OK;
+}
+
 static int breakout_token_select_dims(
     BreakoutPufferlibTokenPolicy* policy,
     const BreakoutPufferlibTokenConfig* config
@@ -1170,13 +1475,25 @@ int breakout_pufferlib_token_config_from_ini(
             &out->input_feature_kind) != TKM_OK) {
         return TKM_ERR;
     }
-    if (strcmp(layout_kind, "autoregressive_obs_action") != 0 ||
-        strcmp(layout_predict, "next_token") != 0 ||
-        strcmp(tokenizer_kind, "selected_quantized") != 0 ||
-        strcmp(action_tokenizer_kind, "categorical") != 0 ||
-        !breakout_token_model_predicts_next_token(out->model_kind) ||
-        out->head_kind != BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL ||
-        out->input_feature_kind != BREAKOUT_PUFFERLIB_TOKEN_INPUT_TOKEN_STREAM) {
+    if (breakout_token_model_predicts_next_token(out->model_kind)) {
+        if (strcmp(layout_kind, "autoregressive_obs_action") != 0 ||
+            strcmp(layout_predict, "next_token") != 0 ||
+            strcmp(tokenizer_kind, "selected_quantized") != 0 ||
+            strcmp(action_tokenizer_kind, "categorical") != 0 ||
+            out->head_kind != BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL ||
+            out->input_feature_kind != BREAKOUT_PUFFERLIB_TOKEN_INPUT_TOKEN_STREAM) {
+            return TKM_ERR;
+        }
+    } else if (breakout_token_model_predicts_action(out->model_kind)) {
+        if (strcmp(layout_kind, "obs_action_interleaved") != 0 ||
+            strcmp(layout_predict, "action") != 0 ||
+            strcmp(tokenizer_kind, "selected_continuous") != 0 ||
+            strcmp(action_tokenizer_kind, "categorical") != 0 ||
+            out->head_kind != BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL ||
+            out->input_feature_kind != BREAKOUT_PUFFERLIB_TOKEN_INPUT_VALUE_WINDOW) {
+            return TKM_ERR;
+        }
+    } else {
         return TKM_ERR;
     }
 
@@ -1275,13 +1592,15 @@ int breakout_pufferlib_token_policy_train(
         config->selected_dim_count > BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS ||
         config->history > BREAKOUT_PUFFERLIB_TOKEN_HISTORY ||
         (config->model_kind != BREAKOUT_PUFFERLIB_TOKEN_MODEL_UNSPECIFIED &&
+            config->model_kind != BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW &&
             config->model_kind != BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM &&
             config->model_kind != BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_BACKOFF_NGRAM &&
             config->model_kind != BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_MLP_WINDOW) ||
         (config->head_kind != BREAKOUT_PUFFERLIB_TOKEN_HEAD_UNSPECIFIED &&
             config->head_kind != BREAKOUT_PUFFERLIB_TOKEN_HEAD_CATEGORICAL) ||
         (config->input_feature_kind != BREAKOUT_PUFFERLIB_TOKEN_INPUT_UNSPECIFIED &&
-            config->input_feature_kind != BREAKOUT_PUFFERLIB_TOKEN_INPUT_TOKEN_STREAM)) {
+            config->input_feature_kind != BREAKOUT_PUFFERLIB_TOKEN_INPUT_TOKEN_STREAM &&
+            config->input_feature_kind != BREAKOUT_PUFFERLIB_TOKEN_INPUT_VALUE_WINDOW)) {
         return TKM_ERR;
     }
     memset(report, 0, sizeof(*report));
@@ -1299,7 +1618,8 @@ int breakout_pufferlib_token_policy_train(
         config->input_feature_kind == BREAKOUT_PUFFERLIB_TOKEN_INPUT_UNSPECIFIED ?
             BREAKOUT_PUFFERLIB_TOKEN_INPUT_TOKEN_STREAM : config->input_feature_kind;
     policy->use_mlp =
-        policy->model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_MLP_WINDOW ? 1u : 0u;
+        (policy->model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_MLP_WINDOW ||
+            policy->model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW) ? 1u : 0u;
     policy->token_mlp_hidden_dim = config->model_hidden_dim > 0u ?
         config->model_hidden_dim : BREAKOUT_PUFFERLIB_TOKEN_DEFAULT_MLP_HIDDEN;
 
@@ -1327,6 +1647,58 @@ int breakout_pufferlib_token_policy_train(
 
     if (breakout_token_select_dims(policy, config) != TKM_OK) {
         return TKM_ERR;
+    }
+    if (policy->model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW) {
+        uint32_t action_correct = 0u;
+        uint32_t action_total = 0u;
+
+        if (breakout_token_mlp_init(policy) != TKM_OK) {
+            return TKM_ERR;
+        }
+        for (uint32_t epoch = 0u; epoch < config->epochs; epoch++) {
+            if (breakout_continuous_mlp_pass(
+                    policy,
+                    dataset,
+                    config,
+                    1u,
+                    &train_rows,
+                    &heldout_rows,
+                    NULL,
+                    NULL) != TKM_OK) {
+                return TKM_ERR;
+            }
+        }
+        if (breakout_continuous_mlp_pass(
+                policy,
+                dataset,
+                config,
+                0u,
+                &train_rows,
+                &heldout_rows,
+                &action_correct,
+                &action_total) != TKM_OK ||
+            train_rows == 0u ||
+            heldout_rows == 0u ||
+            action_total == 0u) {
+            return TKM_ERR;
+        }
+
+        breakout_pufferlib_token_policy_reset(policy);
+        report->source_rows = dataset->row_count;
+        report->train_rows = train_rows;
+        report->heldout_rows = heldout_rows;
+        report->heldout_accuracy = (float)action_correct / (float)action_total;
+        report->obs_token_accuracy = 0.0f;
+        report->action_token_accuracy = report->heldout_accuracy;
+        report->bin_count = policy->bin_count;
+        report->selected_dim_count = policy->selected_dim_count;
+        report->exact_predictions = 0u;
+        report->backoff_predictions = 0u;
+        report->prior_predictions = 0u;
+        if (breakout_token_report_copy_layer_names(policy, config, report) != TKM_OK) {
+            return TKM_ERR;
+        }
+        return TKM_OK;
     }
     if (policy->model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_MLP_WINDOW) {
         uint32_t obs_correct = 0u;
@@ -1461,6 +1833,7 @@ int breakout_pufferlib_token_policy_reset(BreakoutPufferlibTokenPolicy* policy) 
         return TKM_ERR;
     }
     breakout_token_stream_context_reset(policy->stream_context, &policy->stream_context_count);
+    breakout_continuous_history_reset(policy);
     if (breakout_token_model_uses_token_stream(policy->model_kind)) {
         breakout_token_stream_context_push(
             policy->stream_context,
@@ -1480,6 +1853,26 @@ int breakout_pufferlib_token_policy_predict(
 
     if (!breakout_token_policy_ready(policy) || !obs || !out_action) {
         return TKM_ERR;
+    }
+    if (breakout_token_model_uses_value_window(policy->model_kind)) {
+        float selected_values[BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS];
+
+        if (breakout_continuous_mlp_predict_action_from_history(
+                policy,
+                policy->value_history,
+                policy->value_history_count,
+                obs,
+                out_action) != TKM_OK ||
+            breakout_continuous_copy_selected_values(policy, obs, selected_values) != TKM_OK) {
+            return TKM_ERR;
+        }
+        breakout_continuous_history_push(
+            policy->value_history,
+            &policy->value_history_count,
+            policy->history,
+            policy->selected_dim_count,
+            selected_values);
+        return TKM_OK;
     }
     if (breakout_token_make_selected_tokens(policy, obs, current_obs_tokens) != TKM_OK) {
         return TKM_ERR;

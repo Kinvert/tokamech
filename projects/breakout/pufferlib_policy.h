@@ -19,6 +19,7 @@
 
 typedef enum {
     BREAKOUT_PUFFERLIB_TOKEN_MODEL_UNSPECIFIED = 0,
+    BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW = 2,
     BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_NGRAM = 3,
     BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_BACKOFF_NGRAM = 4,
     BREAKOUT_PUFFERLIB_TOKEN_MODEL_TOKEN_MLP_WINDOW = 6
@@ -37,8 +38,21 @@ typedef enum {
 
 typedef enum {
     BREAKOUT_PUFFERLIB_TOKEN_INPUT_UNSPECIFIED = 0,
-    BREAKOUT_PUFFERLIB_TOKEN_INPUT_TOKEN_STREAM = 1
+    BREAKOUT_PUFFERLIB_TOKEN_INPUT_TOKEN_STREAM = 1,
+    BREAKOUT_PUFFERLIB_TOKEN_INPUT_VALUE_WINDOW = 2
 } BreakoutPufferlibTokenInputFeatureKind;
+
+typedef enum {
+    BREAKOUT_PUFFERLIB_RENDER_VIS_NONE = 0,
+    BREAKOUT_PUFFERLIB_RENDER_VIS_TOPK = 1,
+    BREAKOUT_PUFFERLIB_RENDER_VIS_TOKEN_STREAM = 2,
+    BREAKOUT_PUFFERLIB_RENDER_VIS_CONTEXT_GRID = 3,
+    BREAKOUT_PUFFERLIB_RENDER_VIS_QUANTIZATION = 4,
+    BREAKOUT_PUFFERLIB_RENDER_VIS_PIPELINE = 5,
+    BREAKOUT_PUFFERLIB_RENDER_VIS_TRANSFORMER = 6,
+    BREAKOUT_PUFFERLIB_RENDER_VIS_CONTINUOUS_MLP = 7,
+    BREAKOUT_PUFFERLIB_RENDER_VIS_ALL = 8
+} BreakoutPufferlibRenderVisualizationKind;
 
 typedef struct {
     uint32_t key;
@@ -101,6 +115,8 @@ typedef struct {
     uint32_t ngram_class_prior[TKM_MLP_WINDOW_MAX_OUTPUT];
     uint32_t stream_context[BREAKOUT_PUFFERLIB_TOKEN_HISTORY];
     uint32_t stream_context_count;
+    float value_history[BREAKOUT_PUFFERLIB_TOKEN_HISTORY * BREAKOUT_PUFFERLIB_TOKEN_MAX_SELECTED_DIMS];
+    uint32_t value_history_count;
     TkmMlpWindow mlp;
 } BreakoutPufferlibTokenPolicy;
 
@@ -119,6 +135,10 @@ int breakout_pufferlib_token_policy_predict(
     BreakoutPufferlibTokenPolicy* policy,
     const float* obs,
     uint8_t* out_action
+);
+int breakout_pufferlib_render_visualization_kind_from_string(
+    const char* text,
+    BreakoutPufferlibRenderVisualizationKind* out
 );
 
 #endif

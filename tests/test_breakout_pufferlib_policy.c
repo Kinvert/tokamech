@@ -484,6 +484,97 @@ static void test_breakout_token_mlp_window_uses_categorical_full_vocab_head(void
     CHECK(action < TKM_PUFFERLIB_BREAKOUT_ACTION_COUNT);
 }
 
+static void make_continuous_action_dataset(TkmFloatTransitionDataset* dataset) {
+    tkm_float_transition_dataset_init(dataset);
+    for (int32_t episode = 0; episode < 18; episode++) {
+        for (int32_t t = 0; t < 12; t++) {
+            TkmFloatTransition* row;
+            float paddle = (float)((episode + t) % 9) / 8.0f;
+            float ball = (float)((episode * 2 + t * 3) % 9) / 8.0f;
+
+            CHECK(dataset->row_count < TKM_FLOAT_TRANSITION_MAX_ROWS);
+            row = &dataset->rows[dataset->row_count++];
+            memset(row, 0, sizeof(*row));
+            row->version = 1;
+            strcpy(row->env, "pufferlib_breakout");
+            strcpy(row->source, "test");
+            row->env_index = 0;
+            row->episode = episode;
+            row->t = t;
+            row->obs_dim = TKM_PUFFERLIB_BREAKOUT_OBS_DIM;
+            row->obs[0] = paddle;
+            row->obs[1] = ball;
+            row->obs[2] = paddle - ball;
+            row->obs[3] = ball - paddle;
+            row->action = paddle + 0.05f < ball ? 2u : (paddle > ball + 0.05f ? 1u : 0u);
+            row->terminal = t == 11 ? 1u : 0u;
+        }
+    }
+}
+
+static void test_breakout_continuous_mlp_first_dims_predicts_actions(void) {
+    static TkmFloatTransitionDataset dataset;
+    TkmIni ini;
+    BreakoutPufferlibTokenPolicy policy;
+    BreakoutPufferlibTokenConfig config;
+    BreakoutPufferlibTokenReport report;
+    float obs[TKM_PUFFERLIB_BREAKOUT_OBS_DIM] = {0.0f};
+    uint8_t action = 99u;
+    const char* text =
+        "[sequence_layout]\n"
+        "kind = obs_action_interleaved\n"
+        "history = 4\n"
+        "predict = action\n"
+        "[tokenizer.observation]\n"
+        "kind = selected_continuous\n"
+        "dims = 4\n"
+        "selection = first_dims\n"
+        "bins = 16\n"
+        "[tokenizer.action]\n"
+        "kind = categorical\n"
+        "actions = 3\n"
+        "[input_features]\n"
+        "kind = value_window\n"
+        "[sequence_model]\n"
+        "kind = mlp_window\n"
+        "hidden = 32\n"
+        "epochs = 80\n"
+        "learning_rate = 0.03\n"
+        "[action_head]\n"
+        "kind = categorical\n"
+        "actions = 3\n";
+
+    CHECK(tkm_ini_parse(&ini, text) == TKM_OK);
+    CHECK(breakout_pufferlib_token_config_from_ini(&ini, &config) == TKM_OK);
+    CHECK(config.model_kind == BREAKOUT_PUFFERLIB_TOKEN_MODEL_MLP_WINDOW);
+    CHECK(config.input_feature_kind == BREAKOUT_PUFFERLIB_TOKEN_INPUT_VALUE_WINDOW);
+
+    make_continuous_action_dataset(&dataset);
+    CHECK(breakout_pufferlib_token_policy_train(&policy, &dataset, &config, &report) == TKM_OK);
+    CHECK(strcmp(report.sequence_layout_name, "obs_action_interleaved") == 0);
+    CHECK(strcmp(report.observation_tokenizer_name, "selected_continuous") == 0);
+    CHECK(strcmp(report.input_feature_name, "value_window") == 0);
+    CHECK(strcmp(report.sequence_model_name, "mlp_window") == 0);
+    CHECK(policy.token_mlp_input_dim == 20u);
+    CHECK(report.heldout_accuracy >= 0.70f);
+
+    obs[0] = 0.125f;
+    obs[1] = 0.875f;
+    obs[2] = obs[0] - obs[1];
+    obs[3] = obs[1] - obs[0];
+    CHECK(breakout_pufferlib_token_policy_reset(&policy) == TKM_OK);
+    CHECK(breakout_pufferlib_token_policy_predict(&policy, obs, &action) == TKM_OK);
+    CHECK(action == 2u);
+
+    obs[0] = 0.875f;
+    obs[1] = 0.125f;
+    obs[2] = obs[0] - obs[1];
+    obs[3] = obs[1] - obs[0];
+    CHECK(breakout_pufferlib_token_policy_reset(&policy) == TKM_OK);
+    CHECK(breakout_pufferlib_token_policy_predict(&policy, obs, &action) == TKM_OK);
+    CHECK(action == 1u);
+}
+
 typedef enum {
     TOKEN_MATRIX_DATASET_RELATION = 0,
     TOKEN_MATRIX_DATASET_AUTOREGRESSIVE = 1
@@ -781,6 +872,31 @@ static void test_breakout_token_layer_permutation_matrix_rejects_unsupported_com
         "categorical");
 }
 
+static void test_breakout_render_visualization_parser_accepts_overlay_modes(void) {
+    BreakoutPufferlibRenderVisualizationKind kind;
+
+    CHECK(breakout_pufferlib_render_visualization_kind_from_string("none", &kind) == TKM_OK);
+    CHECK(kind == BREAKOUT_PUFFERLIB_RENDER_VIS_NONE);
+    CHECK(breakout_pufferlib_render_visualization_kind_from_string("topk", &kind) == TKM_OK);
+    CHECK(kind == BREAKOUT_PUFFERLIB_RENDER_VIS_TOPK);
+    CHECK(breakout_pufferlib_render_visualization_kind_from_string("token_stream", &kind) == TKM_OK);
+    CHECK(kind == BREAKOUT_PUFFERLIB_RENDER_VIS_TOKEN_STREAM);
+    CHECK(breakout_pufferlib_render_visualization_kind_from_string("continuous_mlp", &kind) == TKM_OK);
+    CHECK(kind == BREAKOUT_PUFFERLIB_RENDER_VIS_CONTINUOUS_MLP);
+    CHECK(breakout_pufferlib_render_visualization_kind_from_string("context_grid", &kind) == TKM_OK);
+    CHECK(kind == BREAKOUT_PUFFERLIB_RENDER_VIS_CONTEXT_GRID);
+    CHECK(breakout_pufferlib_render_visualization_kind_from_string("quantization", &kind) == TKM_OK);
+    CHECK(kind == BREAKOUT_PUFFERLIB_RENDER_VIS_QUANTIZATION);
+    CHECK(breakout_pufferlib_render_visualization_kind_from_string("pipeline", &kind) == TKM_OK);
+    CHECK(kind == BREAKOUT_PUFFERLIB_RENDER_VIS_PIPELINE);
+    CHECK(breakout_pufferlib_render_visualization_kind_from_string("transformer", &kind) == TKM_OK);
+    CHECK(kind == BREAKOUT_PUFFERLIB_RENDER_VIS_TRANSFORMER);
+    CHECK(breakout_pufferlib_render_visualization_kind_from_string("all", &kind) == TKM_OK);
+    CHECK(kind == BREAKOUT_PUFFERLIB_RENDER_VIS_ALL);
+    CHECK(breakout_pufferlib_render_visualization_kind_from_string("token_tape", &kind) == TKM_ERR);
+    CHECK(breakout_pufferlib_render_visualization_kind_from_string("oracle", &kind) == TKM_ERR);
+}
+
 int main(void) {
     test_breakout_token_policy_trains_next_action_from_quantized_tokens();
     test_breakout_token_config_selects_autoregressive_next_token_backend();
@@ -789,8 +905,10 @@ int main(void) {
     test_breakout_tokenizer_first_dims_selects_prefix_dims();
     test_breakout_tokenizer_manual_selection_uses_ini_indices();
     test_breakout_token_mlp_window_uses_categorical_full_vocab_head();
+    test_breakout_continuous_mlp_first_dims_predicts_actions();
     test_breakout_token_layer_permutation_matrix_accepts_supported_combinations();
     test_breakout_token_layer_permutation_matrix_rejects_unsupported_combinations();
+    test_breakout_render_visualization_parser_accepts_overlay_modes();
     puts("breakout pufferlib policy tests passed");
     return 0;
 }

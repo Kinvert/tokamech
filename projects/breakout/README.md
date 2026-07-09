@@ -38,6 +38,7 @@ Config-selected next-token stacks:
 ```text
 projects/breakout/pufferlib_token_ngram.ini
 projects/breakout/pufferlib_token_backoff_ngram.ini
+projects/breakout/pufferlib_token_mlp_first_dims.ini
 projects/breakout/pufferlib_token_mlp_window.ini
 projects/breakout/pufferlib_token_mlp_window_unmasked.ini
 ```
@@ -47,6 +48,16 @@ PufferLib-side requirements for this bridge are documented in:
 ```text
 projects/breakout/PUFFERLIB_INTEGRATION.md
 ```
+
+RayLib render overlays are selected in config with:
+
+```ini
+[render]
+token_visualization = token_stream
+```
+
+Accepted values are `none`, `topk`, `token_stream`, `continuous_mlp`,
+`context_grid`, `quantization`, `pipeline`, `transformer`, and `all`.
 
 Headless PufferLib benchmark:
 

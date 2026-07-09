@@ -155,18 +155,27 @@ make benchmark
 
 ## Pathfinder branch diff
 
-This is the full committed diff for the current PufferLib-side branch used by
+This is the full current diff for the PufferLib-side branch/worktree used by
 Tokamech:
 
 ```text
 branch: tokamech-breakout-jsonl
 base: prophop
-commit: 2b1a4028 pathfinder: breakout-token-mlp-v001 export hooks
-stat: 8 files changed, 641 insertions(+), 15 deletions(-)
+includes: committed export hooks plus the working-tree c_render overlay and side-panel hook
+ocean/breakout/binding.c                      |  43 +++
+ ocean/breakout/breakout.c                     |  54 +++-
+ ocean/breakout/breakout.h                     |  20 +-
+ ocean/breakout/exporter.h                     | 376 ++++++++++++++++++++++++++
+ ocean/breakout/tests/run_exporter_smoke.sh    |  24 ++
+ ocean/breakout/tests/test_breakout_exporter.c | 125 +++++++++
+ ocean/craftax/binding.c                       |   3 +
+ src/pufferlib.cu                              |  12 +-
+ src/vecenv.h                                  |  19 +-
+ 9 files changed, 660 insertions(+), 16 deletions(-)
 ```
 
 Untracked Pathfinder files such as the local `breakout` binary and
-`screenrec001.gif` are not part of this committed diff.
+`screenrec001.gif` are not part of this diff.
 
 ```diff
 diff --git a/ocean/breakout/binding.c b/ocean/breakout/binding.c
@@ -180,7 +189,7 @@ index 471e78b9..5b7ff794 100644
  #define NUM_ATNS 1
  #define ACT_SIZES {3}
  #define OBS_TENSOR_T FloatTensor
- 
+
 +struct StaticVec;
 +void breakout_vec_step(struct StaticVec* vec);
 +void breakout_vec_step_range(struct StaticVec* vec, int env_start, int env_count, int num_workers);
@@ -189,7 +198,7 @@ index 471e78b9..5b7ff794 100644
 +#define MY_VEC_STEP_RANGE breakout_vec_step_range
  #define Env Breakout
  #include "vecenv.h"
- 
+
 +void breakout_vec_step(StaticVec* vec) {
 +    memset(vec->rewards, 0, vec->total_agents * sizeof(float));
 +    memset(vec->terminals, 0, vec->total_agents * sizeof(float));
@@ -238,7 +247,7 @@ index 84029740..10496a8e 100644
  #include "breakout.h"
 +#include "exporter.h"
  #include "puffernet.h"
- 
+
 -void demo() {
 -    Weights* weights = load_weights("resources/breakout/breakout_weights.bin");
 -    int logit_sizes[1] = {3};
@@ -292,11 +301,11 @@ index 84029740..10496a8e 100644
 +    Breakout env;
 +    configure_demo_env(&env);
      allocate(&env);
- 
+
      env.client = make_client(&env);
 @@ -60,5 +94,13 @@ void demo() {
  }
- 
+
  int main() {
 +    const char* demo_steps = getenv("PUFFERLIB_BREAKOUT_DEMO_EXPORT_STEPS");
 +    if (demo_steps != NULL && demo_steps[0] != '\0') {
@@ -308,6 +317,58 @@ index 84029740..10496a8e 100644
 +    }
      demo();
  }
+diff --git a/ocean/breakout/breakout.h b/ocean/breakout/breakout.h
+index a4a1dad4..9ca2aa6d 100644
+--- a/ocean/breakout/breakout.h
++++ b/ocean/breakout/breakout.h
+@@ -508,6 +508,12 @@ void c_step(Breakout* env) {
+
+ Color BRICK_COLORS[6] = {RED, ORANGE, YELLOW, GREEN, SKYBLUE, BLUE};
+
++typedef void (*BreakoutRenderOverlayCallback)(Breakout* env, void* user);
++
++static BreakoutRenderOverlayCallback g_breakout_render_overlay = NULL;
++static void* g_breakout_render_overlay_user = NULL;
++static int g_breakout_render_overlay_panel_width = 0;
++
+ Client* make_client(Breakout* env) {
+     Client* client = (Client*)calloc(1, sizeof(Client));
+     client->width = env->width;
+@@ -517,7 +523,7 @@ Client* make_client(Breakout* env) {
+     client->ball_width = env->ball_width;
+     client->ball_height = env->ball_height;
+
+-    InitWindow(env->width, env->height, "PufferLib Breakout");
++    InitWindow(env->width + g_breakout_render_overlay_panel_width, env->height, "PufferLib Breakout");
+     SetTargetFPS(60 / env->frameskip);
+
+     client->ball = LoadTexture("resources/shared/puffers_128.png");
+@@ -529,6 +535,15 @@ void close_client(Client* client) {
+     free(client);
+ }
+
++void breakout_set_render_overlay(BreakoutRenderOverlayCallback callback, void* user) {
++    g_breakout_render_overlay = callback;
++    g_breakout_render_overlay_user = user;
++}
++
++void breakout_set_render_overlay_panel_width(int width) {
++    g_breakout_render_overlay_panel_width = width > 0 ? width : 0;
++}
++
+ void c_render(Breakout* env) {
+     if (env->client == NULL) {
+         env->client = make_client(env);
+@@ -582,6 +597,9 @@ void c_render(Breakout* env) {
+
+     DrawText(TextFormat("Score: %i", env->score), 10, 10, 20, WHITE);
+     DrawText(TextFormat("Balls: %i", env->num_balls), client->width - 80, 10, 20, WHITE);
++    if (g_breakout_render_overlay != NULL) {
++        g_breakout_render_overlay(env, g_breakout_render_overlay_user);
++    }
+     EndDrawing();
+
+     //PlaySound(client->sound);
 diff --git a/ocean/breakout/exporter.h b/ocean/breakout/exporter.h
 new file mode 100644
 index 00000000..d8c3de4c
@@ -872,7 +933,7 @@ index 583d9a11..6851e715 100644
 @@ -2201,9 +2201,15 @@ void close_impl(PuffeRL& pufferl) {
          cudaProfilerStop();
      }
- 
+
 -    cudaGraphExecDestroy(pufferl.train_cudagraph);
 -    for (int i = 0; i < pufferl.hypers.horizon * pufferl.hypers.num_buffers; i++) {
 -        cudaGraphExecDestroy(pufferl.fused_rollout_cudagraphs[i]);
@@ -886,7 +947,7 @@ index 583d9a11..6851e715 100644
 +            }
 +        }
      }
- 
+
      policy_weights_free(&pufferl.policy, &pufferl.weights);
 diff --git a/src/vecenv.h b/src/vecenv.h
 index 42958d32..8ae14d1b 100644
@@ -895,7 +956,7 @@ index 42958d32..8ae14d1b 100644
 @@ -258,8 +258,6 @@ static void* static_omp_threadmanager(void* arg) {
      int num_workers = threading->num_threads / vec->buffers;
      if (num_workers < 1) num_workers = 1;
- 
+
 -    Env* envs = (Env*)vec->envs;
 -
      printf("Num workers: %d\n", num_workers);
@@ -920,10 +981,10 @@ index 42958d32..8ae14d1b 100644
 +            #endif
              clock_gettime(CLOCK_MONOTONIC, &t1);
              my_accum[EVAL_ENV_STEP] += (t1.tv_sec - t0.tv_sec) * 1000.0f + (t1.tv_nsec - t0.tv_nsec) / 1e6f;
- 
+
 @@ -739,6 +742,9 @@ const char* get_obs_dtype(void) { return dtype_symbol; }
  size_t get_obs_elem_size(void) { return obs_element_size(); }
- 
+
  static inline void _static_vec_env_step(StaticVec* vec) {
 +    #ifdef MY_VEC_STEP
 +        MY_VEC_STEP(vec);
@@ -937,6 +998,6 @@ index 42958d32..8ae14d1b 100644
      }
 +    #endif
  }
- 
+
  void gpu_vec_step(StaticVec* vec) {
 ```
